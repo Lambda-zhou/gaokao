@@ -107,6 +107,65 @@ Questions to answer:
 
 ---
 
+## Scenario: Notebook / DSW proxy deployment for the single-file frontend
+
+### 1. Scope / Trigger
+- Trigger: deployment changes that make `zhiyuan-agent.html` run outside a local desktop browser, especially ModelScope / Alibaba DSW notebook proxy URLs.
+- Applies when the browser-visible frontend and the FastAPI backend are reached through different origins or through a `*-proxy-8000.*` public gateway.
+
+### 2. Signatures
+- Frontend entry page: `GET /zhiyuan-agent.html`
+- Optional frontend alias: `GET /app`
+- Static assets: `GET /assets/*`, `GET /images/*`
+- Backend API base selection:
+  - URL query: `?api=<api-base>` / `?apiBase=<api-base>` / `?api_base=<api-base>`
+  - browser storage key: `localStorage["zhiyuan_api_base_url"]`
+  - DSW same-origin fallback: host matching `*-proxy-8000.*`
+
+### 3. Contracts
+- FastAPI should be able to serve the single-file frontend from the same backend port when deployed behind an 8000 proxy.
+- When the page is opened from a `proxy-8000` public gateway, default API calls must use `window.location.origin`, not browser-local `127.0.0.1`.
+- When the page is opened from a local file or ordinary local static server, the development fallback may remain `http://127.0.0.1:8000`.
+- Users can override auto-detection by adding `?api=<public-api-base>` or setting the localStorage key above.
+
+### 4. Validation & Error Matrix
+- `GET /zhiyuan-agent.html` returns 404 -> FastAPI is not serving the frontend entry; add or verify the static page route.
+- Frontend requests `http://127.0.0.1:8000` from a hosted notebook page -> wrong browser/network boundary; use same-origin proxy or explicit `?api=`.
+- Frontend is opened in a sandboxed Jupyter HTML preview and scripts are blocked -> serve it through FastAPI or a real static HTTP server tab instead.
+- Static page loads but logo/assets 404 -> verify `/assets` and `/images` mounts.
+
+### 5. Good / Base / Bad Cases
+- Good: `https://<id>-proxy-8000.<gateway>/zhiyuan-agent.html` loads the UI and `/api/sessions` is requested from the same origin.
+- Base: frontend is served from another port and opened as `...?api=https://<id>-proxy-8000.<gateway>`.
+- Bad: hosted frontend keeps calling `http://127.0.0.1:8000/api/*`, which points at the user's browser machine instead of the notebook container.
+
+### 6. Tests Required
+- Compile/import check for `main.py` in a Python 3.10+ environment with project requirements installed.
+- HTTP smoke test:
+  - `GET /zhiyuan-agent.html` -> 200 and HTML content type
+  - `GET /assets/brand-logo.png` -> 200 when the asset exists
+  - `GET /api/sessions` -> 200 from the same public origin
+- Browser smoke test on DSW:
+  - open `/zhiyuan-agent.html`
+  - confirm network requests use `https://<id>-proxy-8000.../api/*`
+  - confirm no `Failed to fetch` caused by `127.0.0.1`
+
+### 7. Wrong vs Correct
+#### Wrong
+```js
+return 'http://127.0.0.1:8000';
+```
+for every hosted environment.
+
+#### Correct
+```js
+if (location.hostname.includes('proxy-8000')) return location.origin;
+return 'http://127.0.0.1:8000';
+```
+while still allowing `?api=` / localStorage overrides.
+
+---
+
 ## Code Review Checklist
 
 <!-- What reviewers should check -->
