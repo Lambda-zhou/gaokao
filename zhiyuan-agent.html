@@ -534,8 +534,27 @@
         // ============================================
         // API 鍩虹閰嶇疆
         // ============================================
+        const API_BASE_STORAGE_KEY = 'zhiyuan_api_base_url';
+        const getConfiguredApiBaseUrl = () => {
+            try {
+                const params = new URLSearchParams(window.location.search || '');
+                const apiFromUrl = params.get('api') || params.get('apiBase') || params.get('api_base');
+                if (apiFromUrl) {
+                    const cleaned = apiFromUrl.replace(/\/+$/, '');
+                    localStorage.setItem(API_BASE_STORAGE_KEY, cleaned);
+                    return cleaned;
+                }
+                const stored = localStorage.getItem(API_BASE_STORAGE_KEY);
+                if (stored) return stored.replace(/\/+$/, '');
+            } catch (error) {
+                console.warn('读取 API 地址配置失败', error);
+            }
+            return '';
+        };
+
         const getApiBaseUrl = () => {
-            if (window.location.protocol === 'file:') return 'http://127.0.0.1:8000';
+            const configured = getConfiguredApiBaseUrl();
+            if (configured) return configured;
             if (window.location.port === '8000') return '';
             return 'http://127.0.0.1:8000';
         };
@@ -1271,9 +1290,10 @@
             };
 
             const getApiBaseUrl = () => {
-                if (window.location.protocol === 'file:') return 'http://localhost:8000';
+                const configured = getConfiguredApiBaseUrl();
+                if (configured) return configured;
                 if (window.location.port === '8000') return '';
-                return 'http://localhost:8000';
+                return 'http://127.0.0.1:8000';
             };
 
             const parseNumber = (value) => {
@@ -1605,10 +1625,10 @@
                                 id: loadingId,
                                 type: 'ai',
                                 style: 'zxf',
-                                content: `后端现在没接上：${error.message}。请确认服务在 http://127.0.0.1:8000 跑着，再试一次。`,
+                                content: `后端现在没接上：${error.message}。当前前端请求地址是 ${getApiBaseUrl()}。如果在魔搭 Notebook 运行后端，请把页面地址加上 ?api=你的8000端口公网代理地址，或在控制台执行 localStorage.setItem('${API_BASE_STORAGE_KEY}', '你的8000端口公网代理地址') 后刷新。`,
                                 cards: []
                             }
-                            : msg
+                        : msg
                     )));
                 } finally {
                     setIsSending(false);
