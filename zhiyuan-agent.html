@@ -552,11 +552,23 @@
             return '';
         };
 
+        const isBackendHostedApiOrigin = () => {
+            const { protocol, hostname, port } = window.location;
+            return /^https?:$/.test(protocol) && (
+                port === '8000' ||
+                /(^|[-.])proxy-8000(\.|$)/.test(hostname)
+            );
+        };
+
+        const getDefaultApiBaseUrl = () => {
+            if (isBackendHostedApiOrigin()) return window.location.origin;
+            return 'http://127.0.0.1:8000';
+        };
+
         const getApiBaseUrl = () => {
             const configured = getConfiguredApiBaseUrl();
             if (configured) return configured;
-            if (window.location.port === '8000') return '';
-            return 'http://127.0.0.1:8000';
+            return getDefaultApiBaseUrl();
         };
 
         // ============================================
@@ -1292,8 +1304,7 @@
             const getApiBaseUrl = () => {
                 const configured = getConfiguredApiBaseUrl();
                 if (configured) return configured;
-                if (window.location.port === '8000') return '';
-                return 'http://127.0.0.1:8000';
+                return getDefaultApiBaseUrl();
             };
 
             const parseNumber = (value) => {

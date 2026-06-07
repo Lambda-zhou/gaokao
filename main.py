@@ -1,5 +1,9 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from core.config import settings
 from core.models import ConsultRequest
@@ -11,6 +15,11 @@ from middleware.error_handler import (
 from middleware.logging import setup_logging, logging_middleware
 from middleware.rate_limit import rate_limit_middleware
 from api import consult, evaluate, data, agent, sessions
+
+BASE_DIR = Path(__file__).resolve().parent
+FRONTEND_ENTRY = BASE_DIR / "zhiyuan-agent.html"
+ASSETS_DIR = BASE_DIR / "assets"
+IMAGES_DIR = BASE_DIR / "images"
 
 # 配置日志
 setup_logging()
@@ -46,6 +55,22 @@ app.include_router(evaluate.router, prefix="/api")
 app.include_router(data.router, prefix="/api")
 app.include_router(agent.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
+
+if ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
+
+if IMAGES_DIR.exists():
+    app.mount("/images", StaticFiles(directory=str(IMAGES_DIR)), name="images")
+
+
+@app.get("/zhiyuan-agent.html", include_in_schema=False)
+async def zhiyuan_agent_page():
+    return FileResponse(FRONTEND_ENTRY)
+
+
+@app.get("/app", include_in_schema=False)
+async def app_page():
+    return FileResponse(FRONTEND_ENTRY)
 
 
 @app.get("/")
