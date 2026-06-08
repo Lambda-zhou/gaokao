@@ -281,6 +281,31 @@ answer = self._complete_with_retry(messages, endpoint=endpoint)
 
 ---
 
+## Scenario: Transparent LLM authentication failures
+
+### 1. Scope / Trigger
+- Trigger: backend LLM provider returns HTTP 401/403, `Authentication failed`, `unauthorized`, invalid token, or invalid API key.
+- Applies to `core/llm_client.py`, stream and non-stream OpenAI-compatible requests, and `/health`.
+
+### 2. Contract
+- Authentication failures are configuration failures, not content-generation failures.
+- Do not retry the same 401/403 request multiple times.
+- Do not try backup model IDs after an auth failure; model fallback only applies to invalid-model errors.
+- Do not return local consultation templates that look like normal AI advice when the provider rejected credentials.
+- The visible response must say the model/auth configuration failed and give concrete remediation steps.
+- `/health` must expose enough non-secret diagnostic state to verify provider/model/base URL and last LLM error type.
+
+### 3. Good / Bad Cases
+#### Good
+- `Mimo API HTTP 401` -> response says ModelScope token authentication failed, `llm_last_error_type=authentication`, no fake advice.
+- Missing API key -> response says LLM is not configured and asks the operator to export env vars/restart uvicorn.
+
+#### Bad
+- `Mimo API HTTP 401` -> two retries -> local “我跟你说...” template that appears to answer the user's admissions question.
+- `401` on model A -> tries model B even though the token is invalid for all models.
+
+---
+
 ## Code Review Checklist
 
 <!-- What reviewers should check -->

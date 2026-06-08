@@ -146,6 +146,35 @@ class ConsultIntentContractsTest(unittest.TestCase):
         self.assertEqual("[核心判断]\nok", text)
         self.assertEqual(["bad-model", "good-model"], attempted)
 
+    def test_authentication_error_is_transparent_and_not_template_fallback(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
+            patch.object(llm_client_module.settings, "llm_model", "bad-token-model"), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", "backup-model"), \
+            patch.object(llm_client_module.settings, "llm_api_key", "invalid-token"), \
+            patch.object(llm_client_module.settings, "llm_base_url", "https://example.test/v1"), \
+            patch.object(llm_client_module.settings, "mimo_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_base_url", ""), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        attempted = []
+
+        def fake_complete(messages, model=None, endpoint=None):
+            attempted.append(model)
+            raise llm_client_module.LLMAuthenticationError(
+                "OpenAI-compatible API HTTP 401: Authentication failed"
+            )
+
+        request = make_request("要不要接受调节")
+        with patch.object(client, "_complete_openai_compatible", side_effect=fake_complete):
+            response = client.consult(request, history=[])
+
+        self.assertEqual(["bad-token-model"], attempted)
+        self.assertEqual("authentication", client.last_error_type)
+        self.assertIn("大模型鉴权失败", response.answer)
+        self.assertIn("不会用本地模板冒充 AI 结果", response.answer)
+        self.assertNotIn("先给你一个原则判断", response.answer)
+
     def test_per_request_llm_config_builds_temporary_endpoint_without_mutating_client(self):
         with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
             patch.object(llm_client_module.settings, "llm_model", "server-model"), \

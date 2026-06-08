@@ -33,6 +33,10 @@ class OpenAICompatibleEndpoint:
         return bool(self.api_key and self.base_url and self.model)
 
 
+class LLMAuthenticationError(RuntimeError):
+    """Provider API key/token is missing, expired, or rejected."""
+
+
 class ZXFLLMClient:
     """LLM API 封装：张雪峰角色咨询（含超时、重试、降级）"""
 
@@ -62,6 +66,8 @@ class ZXFLLMClient:
         self.system_prompt = self._load_system_prompt()
         self.client = None
         self._stream_local = threading.local()
+        self.last_error_type = ""
+        self.last_error_summary = ""
         if self.provider == "anthropic" and HAS_ANTHROPIC and self.anthropic_api_key:
             self.client = anthropic.Anthropic(api_key=self.anthropic_api_key)
 
@@ -191,6 +197,70 @@ class ZXFLLMClient:
             if secret:
                 text = text.replace(secret, "[redacted-api-key]")
         return text
+
+    def _record_llm_error(
+        self,
+        error_type: str,
+        error: Exception,
+        endpoint: OpenAICompatibleEndpoint | None = None,
+    ) -> None:
+        self.last_error_type = error_type
+        self.last_error_summary = self._safe_error_text(error, endpoint)[:300]
+
+    def _clear_llm_error(self) -> None:
+        self.last_error_type = ""
+        self.last_error_summary = ""
+
+    def _is_authentication_error(self, error: Exception) -> bool:
+        text = str(error).lower()
+        return (
+            "http 401" in text
+            or "http 403" in text
+            or "authentication failed" in text
+            or "unauthorized" in text
+            or "invalid api key" in text
+            or "invalid token" in text
+            or "forbidden" in text
+        )
+
+    def _authentication_failure_response(
+        self,
+        request: ConsultRequest,
+        error: Exception,
+        endpoint: OpenAICompatibleEndpoint | None = None,
+    ) -> ConsultResponse:
+        provider = endpoint.provider_label if endpoint else self.provider_label
+        model = endpoint.model if endpoint else self.model
+        if provider == "Mimo":
+            fix_hint = "请检查 MIMO_API_KEY 或 MODELSCOPE_API_KEY 是否是有效的 ModelScope token，并确认 Notebook 里已重新 export 后重启 uvicorn。"
+        elif provider == "DeepSeek":
+            fix_hint = "请检查 DEEPSEEK_API_KEY 是否有效，或改用 LLM_PROVIDER=openai-compatible 配置备用模型。"
+        else:
+            fix_hint = "请检查当前 OpenAI-compatible API Key、Base URL 和模型 ID 是否匹配。"
+        safe_error = self._safe_error_text(error, endpoint)
+        return ConsultResponse(
+            answer=(
+                "[核心判断]\n"
+                "这次不是咨询模型正常回答，而是后端大模型鉴权失败，所以我不会用本地模板冒充 AI 结果。\n\n"
+                "[分析过程]\n"
+                f"1. 当前供应商：{provider}；模型：{model or '未配置'}。\n"
+                "2. 终端日志显示 API 返回 401/403 或 token 鉴权失败，说明后端没有拿到可用的大模型访问权限。\n"
+                f"3. 处理建议：{fix_hint}\n\n"
+                "[核验清单]\n"
+                "1. 在运行 uvicorn 的同一个终端执行：echo $MIMO_API_KEY 或 echo $MODELSCOPE_API_KEY，确认不是空值。\n"
+                "2. 如果刚改过环境变量，停止并重启 uvicorn；Python 进程不会自动读取新 export。\n"
+                "3. 打开 /health，确认 llm_available=true，且 llm_last_error_type 为空。"
+            ),
+            thinking_process=[
+                ThinkingStep(step="模型鉴权失败", analysis=safe_error[:180]),
+            ],
+            follow_up_questions=[
+                "是否已经在当前终端 export 了有效的 ModelScope token？",
+                "是否需要改用前端自带 API Key 的模型配置？",
+            ],
+            confidence="low",
+            citations=[],
+        )
 
     def _resolve_llm_endpoint(self) -> tuple[str, str, str, str]:
         """Resolve provider/model/base URL.
@@ -354,7 +424,14 @@ class ZXFLLMClient:
             )
             response.citations = citations or []
             return response
+        except LLMAuthenticationError as e:
+            endpoint = request_endpoint or self._server_openai_endpoint()
+            self._record_llm_error("authentication", e, endpoint)
+            safe_error = self._safe_error_text(e, endpoint)
+            logger.error("LLM authentication failure; returning transparent configuration error: %s", safe_error)
+            return self._authentication_failure_response(request, e, endpoint)
         except Exception as e:
+            self._record_llm_error("runtime", e, request_endpoint)
             safe_error = self._safe_error_text(e, request_endpoint)
             logger.error("LLM final failure, using local fallback: %s", safe_error)
             return self._fallback_from_context(request, extra_context, citations or [], safe_error)
@@ -400,9 +477,21 @@ class ZXFLLMClient:
         for model_index, model in enumerate(candidates):
             for attempt in range(max_retries + 1):
                 try:
-                    return self._complete_openai_compatible(messages, model=model, endpoint=endpoint)
+                    result = self._complete_openai_compatible(messages, model=model, endpoint=endpoint)
+                    self._clear_llm_error()
+                    return result
                 except Exception as e:
                     last_error = e
+                    if self._is_authentication_error(e):
+                        self._record_llm_error("authentication", e, endpoint)
+                        safe_error = self._safe_error_text(e, endpoint)
+                        logger.error(
+                            "%s authentication failed for model %s; not retrying or trying fallback models: %s",
+                            endpoint.provider_label,
+                            model,
+                            safe_error,
+                        )
+                        raise LLMAuthenticationError(safe_error) from e
                     if self._is_invalid_model_error(e) and model_index < len(candidates) - 1:
                         logger.warning(
                             "%s model %s is rejected by provider; trying next candidate %s",
@@ -509,7 +598,10 @@ class ZXFLLMClient:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{endpoint.provider_label} API HTTP {e.code}: {body}") from e
+            message = f"{endpoint.provider_label} API HTTP {e.code}: {body}"
+            if e.code in {401, 403}:
+                raise LLMAuthenticationError(message) from e
+            raise RuntimeError(message) from e
         except urllib.error.URLError as e:
             raise RuntimeError(f"{endpoint.provider_label} API 请求失败：{e.reason}") from e
         except TimeoutError:
@@ -561,7 +653,10 @@ class ZXFLLMClient:
                         callback(delta)
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{endpoint.provider_label} API HTTP {e.code}: {body}") from e
+            message = f"{endpoint.provider_label} API HTTP {e.code}: {body}"
+            if e.code in {401, 403}:
+                raise LLMAuthenticationError(message) from e
+            raise RuntimeError(message) from e
         except urllib.error.URLError as e:
             raise RuntimeError(f"{endpoint.provider_label} API request failed: {e.reason}") from e
         except TimeoutError:
@@ -687,7 +782,7 @@ class ZXFLLMClient:
         )
 
     def _fallback_response(self, request: ConsultRequest) -> ConsultResponse:
-        """当LLM API不可用时返回fallback回答"""
+        """当 LLM 配置不完整时透明返回配置错误，不冒充 AI 回答。"""
         if self.provider in {"mimo", "modelscope"}:
             provider_hint = "请配置 MIMO_API_KEY/MODELSCOPE_API_KEY 和 MIMO_BASE_URL 环境变量以启用AI咨询功能。"
         elif self.provider == "openai-compatible":
@@ -698,18 +793,29 @@ class ZXFLLMClient:
             provider_hint = "请配置 DEEPSEEK_API_KEY 环境变量以启用AI咨询功能。"
         else:
             provider_hint = "请配置 ANTHROPIC_API_KEY 环境变量以启用AI咨询功能。"
+        self.last_error_type = "not_configured"
+        self.last_error_summary = provider_hint
         return ConsultResponse(
-            answer=f"我跟你说，'{request.question}'这个问题——",
+            answer=(
+                "[核心判断]\n"
+                "后端大模型当前没有可用配置，所以这次不会用本地模板冒充 AI 回答。\n\n"
+                "[分析过程]\n"
+                f"1. 当前 provider：{self.provider_label}；模型：{self.model or '未配置'}。\n"
+                f"2. 配置建议：{provider_hint}\n\n"
+                "[核验清单]\n"
+                "1. 在启动 uvicorn 的同一个终端确认环境变量已 export。\n"
+                "2. 修改环境变量后重启 uvicorn。\n"
+                "3. 打开 /health，确认 llm_available=true 且 llm_last_error_type 为空。"
+            ),
             thinking_process=[
                 ThinkingStep(
-                    step="系统提示",
-                    analysis=f"LLM服务当前不可用。{provider_hint}当前为规则引擎fallback模式。"
+                    step="模型未配置",
+                    analysis=f"LLM服务当前不可用。{provider_hint}"
                 )
             ],
             follow_up_questions=[
-                "孩子高考多少分？哪个省的？",
-                "家里经济条件怎么样？",
-                "能接受去哪些城市？",
+                "是否已经在当前终端配置 API Key？",
+                "是否需要使用前端自带 API Key 配置？",
             ],
             confidence="low",
             citations=[],

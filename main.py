@@ -114,6 +114,10 @@ async def health():
         "llm_available": llm_client.is_available(),
         "llm_provider": settings.llm_provider,
         "llm_model": llm_client.model,
+        "llm_provider_label": llm_client.provider_label,
+        "llm_base_url": llm_client.openai_base_url,
+        "llm_last_error_type": llm_client.last_error_type,
+        "llm_last_error_summary": llm_client.last_error_summary,
         "recognition_version": "school_chance_alias_v2",
     }
 
