@@ -572,6 +572,7 @@
         };
 
         const LLM_CONFIG_STORAGE_KEY = 'zhiyuan_user_llm_config_v1';
+        const LLM_SETUP_STORAGE_KEY = 'zhiyuan_llm_setup_state_v1';
         const DEFAULT_USER_LLM_CONFIG = {
             enabled: false,
             provider: 'openai-compatible',
@@ -623,6 +624,20 @@
                 model,
                 model_candidates: modelCandidates
             };
+        };
+
+        const readLlmSetupState = () => {
+            try {
+                return JSON.parse(window.localStorage.getItem(LLM_SETUP_STORAGE_KEY) || '{}');
+            } catch (error) {
+                return {};
+            }
+        };
+
+        const saveLlmSetupState = (state = {}) => {
+            const next = { ...readLlmSetupState(), ...state };
+            window.localStorage.setItem(LLM_SETUP_STORAGE_KEY, JSON.stringify(next));
+            return next;
         };
 
         // ============================================
@@ -1364,6 +1379,8 @@
             const [isSending, setIsSending] = useState(false);
             const [llmConfigOpen, setLlmConfigOpen] = useState(false);
             const [llmConfig, setLlmConfig] = useState(() => readUserLlmConfig());
+            const [llmSetupState, setLlmSetupState] = useState(() => readLlmSetupState());
+            const [llmTestStatus, setLlmTestStatus] = useState({ state: 'idle', message: '' });
 
             // ========== 浼氳瘽绠＄悊 ==========
             const loadSessions = async () => {
@@ -1463,14 +1480,11 @@
                 saveUserLlmConfig(llmConfig);
             }, [llmConfig]);
 
-            if (!isProfileReady) {
-                return (
-                    <ProfileIntakePage
-                        userProfile={userProfile}
-                        onComplete={onProfileComplete}
-                    />
-                );
-            }
+            React.useEffect(() => {
+                if (isProfileReady && !llmSetupState.seen && !buildUserLlmRequestConfig(llmConfig)) {
+                    setLlmConfigOpen(true);
+                }
+            }, [isProfileReady]);
 
             const quickQuestions = [
                 '我该冲哪些学校？',
@@ -1607,6 +1621,126 @@
 
             const resetLlmConfig = () => {
                 setLlmConfig(clearUserLlmConfig());
+                setLlmTestStatus({ state: 'idle', message: '' });
+            };
+
+            const markLlmSetupDone = (mode) => {
+                const next = saveLlmSetupState({ seen: true, mode, updated_at: new Date().toISOString() });
+                setLlmSetupState(next);
+            };
+
+            const skipLlmSetup = () => {
+                updateLlmConfigField('enabled', false);
+                markLlmSetupDone('skipped');
+                setLlmConfigOpen(false);
+                setLlmTestStatus({
+                    state: 'skipped',
+                    message: '已跳过 AI 配置。系统仍可运行，但没有大模型时会更依赖本地规则，结果可能不如接入 AI 后准确。'
+                });
+            };
+
+            const testLlmConfig = async () => {
+                const requestConfig = buildUserLlmRequestConfig({ ...llmConfig, enabled: true });
+                if (!requestConfig) {
+                    setLlmTestStatus({ state: 'error', message: '请先填写 API Key、Base URL 和模型 ID。' });
+                    return;
+                }
+                setLlmTestStatus({ state: 'testing', message: '正在测试模型连接...' });
+                try {
+                    const res = await fetch(`${getApiBaseUrl()}/api/llm/test`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestConfig)
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.ok) {
+                        const nextConfig = saveUserLlmConfig({ ...llmConfig, enabled: true });
+                        setLlmConfig(nextConfig);
+                        markLlmSetupDone('configured');
+                        setLlmTestStatus({ state: 'ok', message: data.message || '模型连接测试成功。' });
+                    } else {
+                        setLlmTestStatus({ state: 'error', message: data.message || data.detail || '模型连接测试失败。' });
+                    }
+                } catch (error) {
+                    setLlmTestStatus({ state: 'error', message: `测试失败：${error.message}` });
+                }
+            };
+
+            if (!isProfileReady) {
+                return (
+                    <div>
+                        {!llmSetupState.seen && (
+                            <section className="edu-page pb-0">
+                                <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                                    <div className="edu-card p-6 border-l-4 border-l-zxf-red">
+                                        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
+                                            <div className="max-w-2xl">
+                                                <div className="flex items-center gap-2 text-ink-900 font-black text-lg">
+                                                    <Icon name="key-round" size={20} className="text-zxf-red" />
+                                                    先接入大模型 API（可跳过）
+                                                </div>
+                                                <p className="text-sm text-ink-500 mt-2 leading-6">
+                                                    支持大多数 OpenAI Chat 兼容接口。建议先填写 Base URL、模型 ID 和 API Key 并测试；
+                                                    如果暂时跳过，系统仍可运行，但会更依赖本地规则，结果通常不如接入 AI 后准确。
+                                                </p>
+                                                <div className="grid md:grid-cols-3 gap-3 mt-4">
+                                                    <input
+                                                        type="text"
+                                                        value={llmConfig.base_url || ''}
+                                                        onChange={(e) => updateLlmConfigField('base_url', e.target.value)}
+                                                        placeholder="Base URL，如 https://.../v1"
+                                                        className="px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
+                                                    />
+                                                    <input
+                                                        type="text"
+                                                        value={llmConfig.model || ''}
+                                                        onChange={(e) => updateLlmConfigField('model', e.target.value)}
+                                                        placeholder="模型 ID，由你按控制台填写"
+                                                        className="px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
+                                                    />
+                                                    <input
+                                                        type="password"
+                                                        value={llmConfig.api_key || ''}
+                                                        onChange={(e) => updateLlmConfigField('api_key', e.target.value)}
+                                                        placeholder="API Key"
+                                                        className="px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
+                                                    />
+                                                </div>
+                                                {llmTestStatus.message && (
+                                                    <div className={`mt-3 text-xs font-bold ${
+                                                        llmTestStatus.state === 'ok' ? 'text-emerald-700' :
+                                                        llmTestStatus.state === 'error' ? 'text-red-600' : 'text-amber-700'
+                                                    }`}>
+                                                        {llmTestStatus.message}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="flex flex-wrap lg:flex-col gap-2 lg:min-w-[150px]">
+                                                <button
+                                                    onClick={testLlmConfig}
+                                                    disabled={llmTestStatus.state === 'testing'}
+                                                    className="px-4 py-2.5 rounded-xl bg-zxf-red text-white text-sm font-black hover:bg-red-700 disabled:bg-ink-300"
+                                                >
+                                                    {llmTestStatus.state === 'testing' ? '测试中...' : '测试并启用'}
+                                                </button>
+                                                <button
+                                                    onClick={skipLlmSetup}
+                                                    className="px-4 py-2.5 rounded-xl border border-amber-200 bg-amber-50 text-sm font-black text-amber-700 hover:bg-amber-100"
+                                                >
+                                                    跳过 AI 设置
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                        )}
+                        <ProfileIntakePage
+                            userProfile={userProfile}
+                            onComplete={onProfileComplete}
+                        />
+                    </div>
+                );
             };
 
             const hasConsultSectionBlock = (answer = '', labels = []) => {
@@ -2108,10 +2242,11 @@
                                                     <div>
                                                         <div className="flex items-center gap-2 text-ink-900 font-black">
                                                             <Icon name="key-round" size={18} className="text-zxf-red" />
-                                                            自带 API Key 调大模型
+                                                            第一步：接入你的大模型 API
                                                         </div>
                                                         <p className="text-xs text-ink-500 mt-1 leading-5">
-                                                            支持 OpenAI-compatible 接口。API Key 仅保存在当前浏览器 localStorage；每次咨询时临时发送给后端，不写入会话记录。
+                                                            支持大多数 OpenAI Chat 兼容接口。API Key 仅保存在当前浏览器 localStorage；每次咨询时临时发送给后端，不写入会话记录。
+                                                            你也可以跳过设置，但没有 AI 时系统会更依赖本地规则，回答准确性和灵活性通常不如接入 AI。
                                                         </p>
                                                     </div>
                                                     <button
@@ -2144,7 +2279,7 @@
                                                         />
                                                     </label>
                                                     <label className="block">
-                                                        <span className="text-xs font-bold text-ink-500">模型 ID</span>
+                                                        <span className="text-xs font-bold text-ink-500">模型 ID（需要你按供应商控制台填写）</span>
                                                         <input
                                                             type="text"
                                                             value={llmConfig.model || ''}
@@ -2176,12 +2311,22 @@
                                                 </div>
 
                                                 <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
-                                                    <div className={`text-xs font-bold ${hasActiveUserLlmConfig() ? 'text-emerald-700' : 'text-amber-700'}`}>
-                                                        {hasActiveUserLlmConfig()
+                                                    <div className={`text-xs font-bold ${
+                                                        llmTestStatus.state === 'ok' ? 'text-emerald-700' :
+                                                        llmTestStatus.state === 'error' ? 'text-red-600' :
+                                                        hasActiveUserLlmConfig() ? 'text-emerald-700' : 'text-amber-700'
+                                                    }`}>
+                                                        {llmTestStatus.message || (hasActiveUserLlmConfig()
                                                             ? '配置完整：下一次提问会优先使用你的 API Key。'
-                                                            : '未启用或缺少 API Key / Base URL / 模型 ID，将继续使用后端默认模型。'}
+                                                            : '未启用或缺少 API Key / Base URL / 模型 ID。可以先测试，或跳过 AI 设置。')}
                                                     </div>
                                                     <div className="flex items-center gap-2">
+                                                        <button
+                                                            onClick={skipLlmSetup}
+                                                            className="px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-xs font-bold text-amber-700 hover:bg-amber-100"
+                                                        >
+                                                            跳过 AI 设置
+                                                        </button>
                                                         <button
                                                             onClick={resetLlmConfig}
                                                             className="px-3 py-2 rounded-xl border border-ink-100 text-xs font-bold text-ink-500 hover:bg-ink-50"
@@ -2189,10 +2334,24 @@
                                                             清空配置
                                                         </button>
                                                         <button
-                                                            onClick={() => setLlmConfigOpen(false)}
-                                                            className="px-3 py-2 rounded-xl bg-zxf-red text-white text-xs font-bold hover:bg-red-700"
+                                                            onClick={testLlmConfig}
+                                                            disabled={llmTestStatus.state === 'testing'}
+                                                            className={`px-3 py-2 rounded-xl text-white text-xs font-bold ${
+                                                                llmTestStatus.state === 'testing'
+                                                                    ? 'bg-ink-300 cursor-not-allowed'
+                                                                    : 'bg-zxf-red hover:bg-red-700'
+                                                            }`}
                                                         >
-                                                            保存并关闭
+                                                            {llmTestStatus.state === 'testing' ? '测试中...' : '测试并启用'}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                if (hasActiveUserLlmConfig()) markLlmSetupDone('configured');
+                                                                setLlmConfigOpen(false);
+                                                            }}
+                                                            className="px-3 py-2 rounded-xl border border-ink-100 text-xs font-bold text-ink-600 hover:bg-ink-50"
+                                                        >
+                                                            关闭
                                                         </button>
                                                     </div>
                                                 </div>

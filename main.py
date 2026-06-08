@@ -14,7 +14,7 @@ from middleware.error_handler import (
 )
 from middleware.logging import setup_logging, logging_middleware
 from middleware.rate_limit import rate_limit_middleware
-from api import consult, evaluate, data, agent, sessions
+from api import consult, evaluate, data, agent, sessions, llm
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_ENTRY = BASE_DIR / "zhiyuan-agent.html"
@@ -55,6 +55,7 @@ app.include_router(evaluate.router, prefix="/api")
 app.include_router(data.router, prefix="/api")
 app.include_router(agent.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
+app.include_router(llm.router, prefix="/api")
 
 if ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
@@ -93,6 +94,9 @@ async def root():
                 "delete": "DELETE /api/sessions/{id}",
                 "update_profile": "PUT /api/sessions/{id}/profile",
                 "rename": "PUT /api/sessions/{id}/rename",
+            },
+            "llm": {
+                "test": "POST /api/llm/test (测试用户填写的 OpenAI Chat 兼容配置)",
             },
             "agent": {
                 "recommend": "POST /api/agent/recommend",

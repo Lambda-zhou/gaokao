@@ -246,11 +246,14 @@ LLM_MODEL_CANDIDATES=Qwen/Qwen3-235B-A22B,Qwen/Qwen3-30B-A3B
 
 ### 1. Scope / Trigger
 - Trigger: frontend or API changes let an end user provide their own OpenAI-compatible API key for one consultation request.
-- Applies to `zhiyuan-agent.html`, `core/models.py`, `core/llm_client.py`, and the consult orchestrator request flow.
+- Applies to `zhiyuan-agent.html`, `api/llm.py`, `core/models.py`, `core/openai_chat_client.py`, `core/llm_client.py`, and the consult orchestrator request flow.
 
 ### 2. Signatures
 - Request field: `ConsultRequest.llm_config`
 - Frontend storage key: `localStorage["zhiyuan_user_llm_config_v1"]`
+- First-run setup storage key: `localStorage["zhiyuan_llm_setup_state_v1"]`
+- Validation endpoint: `POST /api/llm/test`
+- Shared adapter: `OpenAIChatClient`
 - Runtime endpoint builder: `ZXFLLMClient._request_openai_endpoint(config)`
 
 ### 3. Contracts
@@ -260,11 +263,15 @@ LLM_MODEL_CANDIDATES=Qwen/Qwen3-235B-A22B,Qwen/Qwen3-30B-A3B
 - `base_url` may be an OpenAI-compatible root ending in `/v1` or a full `/chat/completions` URL.
 - Per-request config must not mutate global `llm_client` provider/model/key/base-url fields, because streaming requests run concurrently.
 - If BYOK config is missing or incomplete, fall back to the server `.env` LLM config.
+- First-run UI must offer both "test and enable AI" and "skip AI setup".
+- The skip path must warn users that without an LLM the system relies more on local rules and may be less accurate than with AI.
+- `/api/llm/test` must make a tiny OpenAI Chat request using the user-supplied key/model/base URL and must not persist or echo the key.
 
 ### 4. Validation & Error Matrix
 - Missing `api_key` / `base_url` / `model` -> ignore BYOK and use server config/fallback.
 - Invalid BYOK model -> retry `model_candidates` before local fallback.
 - BYOK provider network/API error -> include only the provider error summary in `thinking_process`; never echo the API key.
+- `/api/llm/test` auth failure -> return `{ ok: false, error_type: "authentication" }` with sanitized detail.
 - Session save after consult -> only save user question and assistant answer.
 
 ### 5. Wrong vs Correct

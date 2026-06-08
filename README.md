@@ -332,6 +332,21 @@ RATE_LIMIT_WINDOW=60
 RATE_LIMIT_MAX=30
 ```
 
+前端首次进入会引导你填写自己的 OpenAI Chat 兼容配置，也可以跳过：
+
+- Base URL 支持 `https://.../v1` 或完整 `https://.../v1/chat/completions`
+- 模型 ID 必须填写供应商控制台里的真实名称
+- API Key 只保存在浏览器 localStorage，每次咨询临时发送给后端，不写入会话
+- 如果跳过 AI 设置，系统仍能运行，但会更依赖本地规则，结果通常不如接入 AI 后准确
+
+可用接口测试配置是否真正可用：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/llm/test \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"openai-compatible","base_url":"https://api-inference.modelscope.cn/v1","model":"Qwen/Qwen3-235B-A22B","api_key":"你的key"}'
+```
+
 LLM 配置读取位置：
 
 - `core/config.py`
@@ -375,6 +390,7 @@ http://127.0.0.1:8000
 | `/health` | GET | 健康检查 |
 | `/api/consult` | POST | AI 志愿咨询主接口 |
 | `/api/consult/stream` | POST | 流式 AI 咨询 |
+| `/api/llm/test` | POST | 测试用户填写的 OpenAI Chat 兼容 API Key / Base URL / 模型 ID |
 | `/api/agent/recommend` | POST | 智能志愿推荐 |
 | `/api/agent/compare` | POST | 志愿方案对比 |
 | `/api/agent/insights` | POST | 学校/专业洞察 |

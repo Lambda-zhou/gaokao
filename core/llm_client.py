@@ -5,8 +5,6 @@ import time
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-import urllib.error
-import urllib.request
 
 try:
     import anthropic
@@ -17,6 +15,12 @@ except ImportError:
 from core.config import settings
 from core.answer_guard import answer_guard
 from core.models import ConsultRequest, ConsultResponse, LLMRequestConfig, ThinkingStep
+from core.openai_chat_client import (
+    OpenAIChatAuthenticationError,
+    OpenAIChatClient,
+    OpenAIChatConfig,
+    normalize_chat_completions_url,
+)
 
 logger = logging.getLogger("app.llm")
 
@@ -73,12 +77,7 @@ class ZXFLLMClient:
 
     def _normalize_chat_completions_url(self, base_url: str) -> str:
         """Accept either an OpenAI-compatible root (/v1) or full chat completions URL."""
-        cleaned = (base_url or "").rstrip("/")
-        if not cleaned:
-            return ""
-        if cleaned.endswith("/chat/completions"):
-            return cleaned
-        return f"{cleaned}/chat/completions"
+        return normalize_chat_completions_url(base_url)
 
     def _split_csv(self, value: str) -> list[str]:
         return [item.strip() for item in (value or "").split(",") if item.strip()]
@@ -179,6 +178,54 @@ class ZXFLLMClient:
             model=model,
             model_candidates=candidates or [model],
         )
+
+    def test_request_config(self, config: LLMRequestConfig) -> dict:
+        """Validate a user-provided OpenAI-compatible config without persisting secrets."""
+        endpoint = self._request_openai_endpoint(config)
+        if not endpoint:
+            return {
+                "ok": False,
+                "error_type": "incomplete",
+                "message": "请填写 API Key、Base URL 和模型 ID。",
+            }
+        client = OpenAIChatClient(
+            OpenAIChatConfig(
+                provider_label=endpoint.provider_label,
+                api_key=endpoint.api_key,
+                base_url=endpoint.base_url,
+                model=endpoint.model,
+                timeout=min(self.timeout, 20),
+            )
+        )
+        try:
+            result = client.test_connection()
+            return {
+                **result,
+                "error_type": "",
+                "message": "连接成功：API Key、Base URL 和模型 ID 可用。",
+            }
+        except OpenAIChatAuthenticationError as e:
+            safe_error = self._safe_error_text(e, endpoint)
+            return {
+                "ok": False,
+                "error_type": "authentication",
+                "provider": endpoint.provider_label,
+                "model": endpoint.model,
+                "base_url": endpoint.base_url,
+                "message": "鉴权失败：请检查 API Key 是否有效，或确认该 Key 是否有权限调用该模型。",
+                "detail": safe_error[:300],
+            }
+        except Exception as e:
+            safe_error = self._safe_error_text(e, endpoint)
+            return {
+                "ok": False,
+                "error_type": "runtime",
+                "provider": endpoint.provider_label,
+                "model": endpoint.model,
+                "base_url": endpoint.base_url,
+                "message": "连接失败：请检查 Base URL、模型 ID、网络或供应商接口格式。",
+                "detail": safe_error[:300],
+            }
 
     def _safe_error_text(
         self,
@@ -570,47 +617,25 @@ class ZXFLLMClient:
     ) -> str:
         endpoint = endpoint or self._server_openai_endpoint()
         active_model = model or endpoint.model
-        payload = {
-            "model": active_model,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                *messages,
-            ],
-            "temperature": 0.7,
-            "max_tokens": 3200,
-        }
-        callback = self._stream_callback()
-        if callback:
-            payload["stream"] = True
-            return self._complete_openai_compatible_stream(payload, callback, endpoint=endpoint)
-
-        req = urllib.request.Request(
-            endpoint.base_url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {endpoint.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
+        client = OpenAIChatClient(
+            OpenAIChatConfig(
+                provider_label=endpoint.provider_label,
+                api_key=endpoint.api_key,
+                base_url=endpoint.base_url,
+                model=active_model,
+                timeout=self.timeout,
+            )
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            message = f"{endpoint.provider_label} API HTTP {e.code}: {body}"
-            if e.code in {401, 403}:
-                raise LLMAuthenticationError(message) from e
-            raise RuntimeError(message) from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"{endpoint.provider_label} API 请求失败：{e.reason}") from e
-        except TimeoutError:
-            raise RuntimeError(f"{endpoint.provider_label} API 请求超时（>{self.timeout}秒）") from None
-
-        choices = data.get("choices") or []
-        if not choices:
-            raise RuntimeError(f"{endpoint.provider_label} API 未返回有效 choices：{data}")
-        return choices[0].get("message", {}).get("content", "")
+            return client.complete(
+                messages,
+                system_prompt=self.system_prompt,
+                temperature=0.7,
+                max_tokens=3200,
+                stream_callback=self._stream_callback(),
+            )
+        except OpenAIChatAuthenticationError as e:
+            raise LLMAuthenticationError(str(e)) from e
 
     def _complete_openai_compatible_stream(
         self,
@@ -619,50 +644,26 @@ class ZXFLLMClient:
         endpoint: OpenAICompatibleEndpoint | None = None,
     ) -> str:
         endpoint = endpoint or self._server_openai_endpoint()
-        req = urllib.request.Request(
-            endpoint.base_url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {endpoint.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "text/event-stream",
-            },
-            method="POST",
+        active_model = payload.get("model") or (endpoint.model if endpoint else self.model)
+        client = OpenAIChatClient(
+            OpenAIChatConfig(
+                provider_label=endpoint.provider_label,
+                api_key=endpoint.api_key,
+                base_url=endpoint.base_url,
+                model=active_model,
+                timeout=self.timeout,
+            )
         )
-        pieces: list[str] = []
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                for raw_line in response:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line or line.startswith(":"):
-                        continue
-                    if line.startswith("data:"):
-                        line = line[5:].strip()
-                    if line == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = data.get("choices") or []
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {}).get("content") or ""
-                    if delta:
-                        pieces.append(delta)
-                        callback(delta)
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            message = f"{endpoint.provider_label} API HTTP {e.code}: {body}"
-            if e.code in {401, 403}:
-                raise LLMAuthenticationError(message) from e
-            raise RuntimeError(message) from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"{endpoint.provider_label} API request failed: {e.reason}") from e
-        except TimeoutError:
-            raise RuntimeError(f"{endpoint.provider_label} API request timed out after {self.timeout}s") from None
-
-        return "".join(pieces)
+            return client.complete(
+                payload.get("messages", []),
+                system_prompt="",
+                temperature=float(payload.get("temperature", 0.7)),
+                max_tokens=int(payload.get("max_tokens", 3200)),
+                stream_callback=callback,
+            )
+        except OpenAIChatAuthenticationError as e:
+            raise LLMAuthenticationError(str(e)) from e
 
     # Backward-compatible aliases for older local scripts/tests that called the
     # DeepSeek-specific helper names directly. The implementation is now shared

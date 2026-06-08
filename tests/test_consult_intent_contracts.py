@@ -8,6 +8,7 @@ from core import consult_orchestrator as orchestrator_module
 from core import llm_client as llm_client_module
 from core.consult_orchestrator import consult_orchestrator
 from core.models import ConsultRequest, LLMRequestConfig, UserProfile
+from core.openai_chat_client import normalize_chat_completions_url
 from core.session_manager import session_manager
 from main import app
 
@@ -121,6 +122,16 @@ class ConsultIntentContractsTest(unittest.TestCase):
         self.assertEqual("https://example.test/v1/chat/completions", client.openai_base_url)
         self.assertTrue(client.is_available())
 
+    def test_openai_chat_url_normalization_accepts_v1_or_full_endpoint(self):
+        self.assertEqual(
+            "https://provider.example/v1/chat/completions",
+            normalize_chat_completions_url("https://provider.example/v1"),
+        )
+        self.assertEqual(
+            "https://provider.example/v1/chat/completions",
+            normalize_chat_completions_url("https://provider.example/v1/chat/completions"),
+        )
+
     def test_invalid_model_error_tries_next_candidate(self):
         with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
             patch.object(llm_client_module.settings, "llm_model", "bad-model"), \
@@ -174,6 +185,28 @@ class ConsultIntentContractsTest(unittest.TestCase):
         self.assertIn("大模型鉴权失败", response.answer)
         self.assertIn("不会用本地模板冒充 AI 结果", response.answer)
         self.assertNotIn("先给你一个原则判断", response.answer)
+
+    def test_llm_test_endpoint_reports_auth_failure_without_leaking_key(self):
+        payload = {
+            "provider": "openai-compatible",
+            "api_key": "secret-token",
+            "base_url": "https://example.test/v1",
+            "model": "bad-token-model",
+        }
+
+        def fake_test(_self):
+            raise llm_client_module.OpenAIChatAuthenticationError(
+                "OpenAI-compatible API HTTP 401: token secret-token rejected"
+            )
+
+        with patch.object(llm_client_module.OpenAIChatClient, "test_connection", fake_test):
+            response = TestClient(app).post("/api/llm/test", json=payload)
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()
+        self.assertFalse(data["ok"])
+        self.assertEqual("authentication", data["error_type"])
+        self.assertNotIn("secret-token", json.dumps(data, ensure_ascii=False))
 
     def test_per_request_llm_config_builds_temporary_endpoint_without_mutating_client(self):
         with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
