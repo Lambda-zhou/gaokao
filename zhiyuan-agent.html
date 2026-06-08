@@ -881,7 +881,7 @@
             return route ? route.key : 'chat';
         };
 
-        const Navbar = ({ activePage, onNavigate }) => {
+        const Navbar = ({ activePage, onNavigate, onOpenNotice }) => {
             const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
             const handleNavigate = (event, item) => {
@@ -920,7 +920,18 @@
                                 ))}
                             </div>
 
-                            <div className="hidden md:block w-[212px]" aria-hidden="true"></div>
+                            <div className="hidden md:flex items-center justify-end w-[260px]">
+                                <button
+                                    onClick={onOpenNotice}
+                                    className="group relative inline-flex items-center gap-2 overflow-hidden rounded-2xl bg-gradient-to-r from-zxf-red via-red-600 to-amber-500 px-4 py-2.5 text-sm font-black text-white shadow-xl shadow-red-500/25 ring-1 ring-red-200 transition-all hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-red-500/35"
+                                    title="查看使用前必须了解的用户须知"
+                                >
+                                    <span className="absolute inset-0 bg-white/20 opacity-0 transition-opacity group-hover:opacity-100"></span>
+                                    <Icon name="alert-triangle" size={17} className="relative" />
+                                    <span className="relative">用户须知</span>
+                                    <span className="relative rounded-full bg-white/20 px-1.5 py-0.5 text-[10px]">必看</span>
+                                </button>
+                            </div>
 
                             <button
                                 className="md:hidden p-2 text-ink-700 rounded-lg hover:bg-ink-50"
@@ -945,10 +956,109 @@
                                         {item.label}
                                     </a>
                                 ))}
+                                <button
+                                    onClick={() => {
+                                        onOpenNotice();
+                                        setMobileMenuOpen(false);
+                                    }}
+                                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-zxf-red via-red-600 to-amber-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-red-500/25"
+                                >
+                                    <Icon name="alert-triangle" size={17} />
+                                    用户须知 · 必看
+                                </button>
                             </div>
                         </div>
                     )}
                 </nav>
+            );
+        };
+
+        const UserNoticeModal = ({ isOpen, onClose }) => {
+            if (!isOpen) return null;
+
+            const notices = [
+                {
+                    title: '本系统只做信息获取和填报思路辅助',
+                    content: '本系统仅用于帮助没经验、或者不知道如何着手的家长和孩子，理解该如何获取信息、如何更好地整理志愿填报思路；系统内容不构成录取承诺，不包含替用户直接做决定的推荐成分。'
+                },
+                {
+                    title: '最终填报责任由用户自行承担',
+                    content: '任何最终填报行为和填报内容，都应由用户本人及家庭经过深思熟虑后决定；最终结果与本系统无关，本系统不承担由填报行为产生的责任。'
+                },
+                {
+                    title: '建议先了解孩子的兴趣方向',
+                    content: '建议可以先测一下孩子的 MBTI，或使用其他能够体现孩子兴趣方向、性格倾向和长期偏好的工具；这些内容对选专业、判断学习动力和职业方向会有一定帮助。'
+                },
+                {
+                    title: '大模型可自行设置',
+                    content: '大模型接口可以由用户自行设定；当前系统内置默认模型为 mimo-v2.5-pro，也支持在模型配置中填写其他 OpenAI Chat 兼容接口。'
+                },
+                {
+                    title: '学习交流，非盈利服务',
+                    content: '本系统不参与任何盈利行为，仅用于学习交流。如能对大家有所帮助，也希望你可以推荐给身边真正有需要的人，谢谢。'
+                },
+            ];
+
+            return (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center px-4 py-6">
+                    <div className="absolute inset-0 bg-ink-950/70 backdrop-blur-sm" onClick={onClose}></div>
+                    <div className="relative w-full max-w-3xl overflow-hidden rounded-[28px] border border-red-200 bg-white shadow-2xl shadow-red-950/30">
+                        <div className="relative bg-gradient-to-br from-zxf-red via-red-600 to-amber-500 px-6 sm:px-8 py-6 text-white">
+                            <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/15 blur-2xl"></div>
+                            <div className="relative flex items-start justify-between gap-4">
+                                <div>
+                                    <div className="inline-flex items-center gap-2 rounded-full bg-white/18 px-3 py-1 text-xs font-black ring-1 ring-white/25">
+                                        <Icon name="alert-triangle" size={15} />
+                                        使用前请先阅读
+                                    </div>
+                                    <h2 className="mt-4 text-2xl sm:text-3xl font-black tracking-tight">用户须知</h2>
+                                    <p className="mt-2 max-w-2xl text-sm sm:text-base leading-7 text-white/85">
+                                        志愿填报是家庭重大决策，本系统只帮助你整理信息和思路，不替代用户本人判断。
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={onClose}
+                                    className="rounded-2xl bg-white/15 p-2 text-white hover:bg-white/25 transition-colors"
+                                    aria-label="关闭用户须知"
+                                >
+                                    <Icon name="x" size={20} />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="max-h-[70vh] overflow-y-auto px-5 sm:px-8 py-6">
+                            <div className="space-y-4">
+                                {notices.map((item, index) => (
+                                    <div key={item.title} className="rounded-2xl border border-ink-100 bg-gradient-to-br from-white to-red-50/40 p-4 sm:p-5 shadow-sm">
+                                        <div className="flex items-start gap-3">
+                                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-zxf-red text-sm font-black text-white shadow-md shadow-red-500/20">
+                                                {index + 1}
+                                            </div>
+                                            <div>
+                                                <h3 className="font-black text-ink-900">{item.title}</h3>
+                                                <p className="mt-1 text-sm leading-7 text-ink-600">{item.content}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+                                <strong>再次提醒：</strong>最终志愿填报请以省教育考试院、阳光高考、学校招生网、招生章程和用户自身判断为准。
+                            </div>
+
+                            <div className="mt-6 flex justify-end">
+                                <button
+                                    onClick={onClose}
+                                    className="inline-flex items-center gap-2 rounded-2xl bg-zxf-red px-5 py-3 text-sm font-black text-white shadow-lg shadow-red-500/20 hover:bg-red-700 transition-colors"
+                                >
+                                    我已了解
+                                    <Icon name="check-circle-2" size={17} />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             );
         };
 
@@ -4680,7 +4790,7 @@
                                         <div className="mt-5 grid md:grid-cols-2 gap-4">
                                             <div className="rounded-2xl border border-ink-100 bg-white/80 p-4">
                                                 <div className="flex items-center gap-2 text-sm font-black text-ink-900">
-                                                    <Icon name="badge-alert" size={16} className="text-zxf-red" />
+                                                    <Icon name="alert-triangle" size={16} className="text-zxf-red" />
                                                     风险标签
                                                 </div>
                                                 {Array.isArray(plan.riskTags) && plan.riskTags.length > 0 ? (
@@ -6120,6 +6230,7 @@
         // ============================================
         const App = () => {
             const [showSoulQuery, setShowSoulQuery] = useState(false);
+            const [showUserNotice, setShowUserNotice] = useState(false);
             const [activePage, setActivePage] = useState(getRouteFromHash);
             const [isChatStarted, setIsChatStarted] = useState(false);
             const [userProfile, setUserProfile] = useState({
@@ -6195,8 +6306,17 @@
 
             return (
                 <div className="min-h-screen bg-warm-50">
-                    <Navbar activePage={activePage} onNavigate={handleNavigate} />
+                    <Navbar
+                        activePage={activePage}
+                        onNavigate={handleNavigate}
+                        onOpenNotice={() => setShowUserNotice(true)}
+                    />
                     {renderActivePage()}
+
+                    <UserNoticeModal
+                        isOpen={showUserNotice}
+                        onClose={() => setShowUserNotice(false)}
+                    />
 
                     <SoulQueryModal
                         isOpen={showSoulQuery}
