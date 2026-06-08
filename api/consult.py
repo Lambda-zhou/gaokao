@@ -181,7 +181,11 @@ async def consult_stream(request: ConsultRequest):
         threading.Thread(target=worker, daemon=True).start()
 
         while True:
-            event, data = events.get()
+            try:
+                event, data = events.get(timeout=10)
+            except queue.Empty:
+                yield _sse("heartbeat", {"message": "处理中"})
+                continue
             yield _sse(event, data)
             if event == "done":
                 break
