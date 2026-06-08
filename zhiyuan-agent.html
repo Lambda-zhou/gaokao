@@ -356,8 +356,8 @@
         }
 
         .chat-shell {
-            height: calc(100vh - 132px);
-            min-height: 560px;
+            height: calc(100vh - 112px);
+            min-height: 620px;
         }
 
         .chat-main-stage {
@@ -386,6 +386,32 @@
 
         .chat-bottom-dock {
             background: #ffffff;
+        }
+
+        .chat-history-drawer {
+            position: fixed;
+            right: 24px;
+            top: 96px;
+            width: min(420px, calc(100vw - 32px));
+            max-height: calc(100vh - 128px);
+            z-index: 55;
+        }
+
+        .chat-history-scroll {
+            max-height: calc(100vh - 250px);
+            overflow-y: auto;
+        }
+
+        @media (max-width: 767px) {
+            .chat-history-drawer {
+                inset: auto 12px 12px 12px;
+                width: auto;
+                max-height: min(74vh, 620px);
+            }
+
+            .chat-history-scroll {
+                max-height: calc(74vh - 170px);
+            }
         }
 
         .reference-title {
@@ -2099,24 +2125,7 @@
                 });
             };
 
-            const getSessionGroup = (session) => {
-                const createdAt = session.created_at ? new Date(session.created_at) : new Date();
-                const today = new Date();
-                const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                const startOfYesterday = new Date(startOfToday);
-                startOfYesterday.setDate(startOfYesterday.getDate() - 1);
-                if (createdAt >= startOfToday) return '今天';
-                if (createdAt >= startOfYesterday) return '昨天';
-                return '更早';
-            };
-
             const safeSessions = Array.isArray(sessions) ? sessions : [];
-
-            const groupedSessions = safeSessions.reduce((groups, session) => {
-                const group = getSessionGroup(session);
-                groups[group].push(session);
-                return groups;
-            }, { '今天': [], '昨天': [], '更早': [] });
 
             const profileStrategy = userProfile.family === '富裕'
                 ? '策略：可以追求热爱，试错空间更大'
@@ -2134,91 +2143,43 @@
                 });
             };
 
-            const historyRows = safeSessions;
-
             return (
                 <section id="chat" className="edu-page">
-                    <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8">
-                        <div className="grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-7 items-stretch chat-shell">
-                            {/* History Sidebar - Desktop */}
-                            <aside className="hidden xl:block h-full min-h-0">
-                                <div className="edu-card p-6 sticky top-24 h-full min-h-0">
-                                    <button
-                                        onClick={createNewSession}
-                                        disabled={isLoadingSessions}
-                                        className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-zxf-red text-white text-base font-bold hover:bg-red-700 transition-colors disabled:opacity-50 shadow-lg shadow-red-500/20"
-                                    >
-                                        <Icon name="plus" size={20} />
-                                        新建对话
-                                    </button>
-
-                                    <div className="mt-6">
-                                        <div className="flex items-center justify-between mb-5">
-                                            <h3 className="font-black text-ink-900 text-lg">历史对话</h3>
-                                            {isLoadingSessions && <Icon name="loader-2" size={14} className="animate-spin text-ink-400" />}
-                                            <button
-                                                onClick={clearAllSessions}
-                                                disabled={!safeSessions.length || isLoadingSessions}
-                                                className="inline-flex items-center gap-1.5 text-xs text-ink-400 hover:text-zxf-red disabled:opacity-40 disabled:hover:text-ink-400"
-                                            >
-                                                <Icon name="trash-2" size={14} />
-                                                清空历史记录
-                                            </button>
-                                        </div>
-
-                                        <div className="space-y-3 max-h-[calc(100vh-320px)] overflow-y-auto pr-1">
-                                            {historyRows.map((session, index) => {
-                                                const active = safeSessions.length ? (currentSessionId ? currentSessionId === session.id : index === 0) : index === 0;
-                                                return (
-                                                    <div
-                                                        key={session.id}
-                                                        onClick={() => switchSession(session.id)}
-                                                        className={`group flex items-center gap-3 px-4 py-3.5 rounded-2xl cursor-pointer transition-colors ${
-                                                            active
-                                                                ? 'bg-red-50 text-zxf-red'
-                                                                : 'bg-white text-ink-700 hover:bg-ink-50'
-                                                        }`}
-                                                    >
-                                                        <Icon name="message-circle" size={17} className={active ? 'text-zxf-red' : 'text-ink-400'} />
-                                                        <div className="min-w-0 flex-1">
-                                                            <div className={`text-sm truncate ${active ? 'font-bold' : 'font-medium'}`}>{session.title}</div>
-                                                        </div>
-                                                        <div className="text-xs text-ink-400 shrink-0">{formatSessionTime(session)}</div>
-                                                        <button
-                                                            onClick={(e) => deleteSession(e, session.id)}
-                                                            className="hidden group-hover:inline-flex p-1.5 text-ink-400 hover:text-red-500 hover:bg-red-100 rounded-md transition-colors"
-                                                            title="删除会话"
-                                                        >
-                                                            <Icon name="trash-2" size={12} />
-                                                        </button>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                </div>
-                            </aside>
-
+                    <div className="max-w-[1580px] mx-auto px-3 sm:px-5 lg:px-8">
+                        <div className="chat-shell">
                             {/* Main Chat Area */}
                             <div className="flex-1 min-w-0 h-full min-h-0">
                                 <div className="chat-main-panel chat-main-stage overflow-hidden">
                                     {/* Chat header */}
-                                    <div className="flex items-center justify-between px-8 py-5 border-b border-ink-100 bg-white">
+                                    <div className="flex items-center justify-between px-5 sm:px-7 py-3.5 border-b border-ink-100 bg-white">
                                         <div className="flex items-center gap-3">
-                                            <div className="w-12 h-12 rounded-full bg-zxf-red flex items-center justify-center shadow-lg shadow-red-500/25">
-                                                <Icon name="brain" size={22} className="text-white" />
+                                            <div className="w-9 h-9 rounded-full bg-zxf-red flex items-center justify-center shadow-md shadow-red-500/20">
+                                                <Icon name="brain" size={18} className="text-white" />
                                             </div>
                                             <div>
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-xl font-black text-ink-900">智小选 · AI 顾问</span>
-                                                    <span className="px-2 py-0.5 rounded-md bg-red-50 text-zxf-red border border-red-100 text-xs font-bold">官方版</span>
+                                                    <span className="text-base sm:text-lg font-black text-ink-900">智小选</span>
+                                                    <span className="hidden sm:inline-flex px-1.5 py-0.5 rounded-md bg-red-50 text-zxf-red border border-red-100 text-[10px] font-bold">AI 顾问</span>
                                                 </div>
-                                                <div className="text-sm text-ink-500 mt-1">
+                                                <div className="hidden sm:block text-xs text-ink-500 mt-0.5">
                                                     基于就业数据 · 中位数原则
                                                 </div>
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">
+                                            <button
+                                                onClick={() => setSidebarOpen(prev => !prev)}
+                                                className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-black transition-colors ${
+                                                    sidebarOpen
+                                                        ? 'bg-red-50 text-zxf-red border-red-100'
+                                                        : 'bg-white text-ink-600 border-ink-100 hover:bg-ink-50'
+                                                }`}
+                                                title="展开或收起历史对话"
+                                            >
+                                                <Icon name="history" size={15} />
+                                                <span className="hidden sm:inline">历史</span>
+                                                <span className="hidden sm:inline text-ink-400 font-bold">{safeSessions.length}</span>
+                                            </button>
                                             <button
                                                 onClick={() => setLlmConfigOpen(prev => !prev)}
                                                 className={`hidden sm:inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-black transition-colors ${
@@ -2238,9 +2199,6 @@
                                             >
                                                 <Icon name="user-pen" size={15} />
                                                 {userProfile.province || '考生'} · {userProfile.score || '未填'}分
-                                            </button>
-                                            <button className="xl:hidden p-2 text-ink-500 hover:bg-ink-50 rounded-lg" onClick={() => setSidebarOpen(!sidebarOpen)}>
-                                                <Icon name="history" size={18} />
                                             </button>
                                         </div>
                                     </div>
@@ -2383,7 +2341,7 @@
                                     )}
 
                                     {/* Messages */}
-                                    <div className="chat-scroll-zone px-8 py-8 space-y-7 overflow-y-auto">
+                                    <div className="chat-scroll-zone px-4 sm:px-8 lg:px-12 py-8 sm:py-10 space-y-8 overflow-y-auto">
                                         {messages.map((msg, idx) => (
                                             <div key={idx} className={`flex gap-4 ${msg.type === 'user' ? 'justify-end' : ''}`}>
                                                 {msg.type === 'ai' && (
@@ -2391,14 +2349,14 @@
                                                         <Icon name="brain" size={18} className="text-white" />
                                                     </div>
                                                 )}
-                                                <div className={`space-y-3 ${msg.type === 'user' ? 'flex flex-col items-end max-w-[68%]' : 'max-w-[92%]'}`}>
+                                                <div className={`space-y-3 ${msg.type === 'user' ? 'flex flex-col items-end max-w-[78%]' : 'max-w-[96%]'}`}>
                                                     <div className={`shadow-sm ${
                                                         msg.type === 'ai'
-                                                            ? msg.style === 'zxf' ? 'bg-black text-white rounded-[22px] border border-zxf-border px-7 py-5 max-w-[1040px]' : 'bg-primary-50/70 border border-primary-100 rounded-[22px] px-6 py-4'
+                                                            ? msg.style === 'zxf' ? 'bg-black text-white rounded-[22px] border border-zxf-border px-6 sm:px-8 py-5 sm:py-6 max-w-[1160px]' : 'bg-primary-50/70 border border-primary-100 rounded-[22px] px-6 py-4'
                                                             : 'bg-zxf-red text-white rounded-[18px] px-5 py-3.5'
                                                     }`}>
                                                         {msg.style === 'zxf' ? (
-                                                            <div className="zxf-message text-[16px] leading-8 whitespace-pre-line">
+                                                            <div className="zxf-message text-[16px] sm:text-[17px] leading-8 sm:leading-9 whitespace-pre-line">
                                                                 {renderMessageContent(msg.content)}
                                                             </div>
                                                         ) : (
@@ -2541,14 +2499,14 @@
                                     </div>
 
                                     {/* Quick questions - ZXF style */}
-                                    <div className="chat-bottom-dock px-8 pt-4 pb-3">
+                                    <div className="chat-bottom-dock px-4 sm:px-8 lg:px-12 pt-2 pb-2">
                                         <div className="flex flex-wrap gap-2">
                                             {quickQuestions.map((q, idx) => (
                                                 <button
                                                     key={idx}
                                                     onClick={() => handleQuickQuestion(q)}
                                                     disabled={isSending}
-                                                    className={`px-4 py-2 text-[14px] bg-white border border-ink-200 rounded-full transition-all ${
+                                                    className={`px-3 py-1.5 text-[12px] bg-white border border-ink-200 rounded-full transition-all ${
                                                         isSending
                                                             ? 'text-ink-300 cursor-not-allowed'
                                                             : 'text-ink-600 hover:border-zxf-red hover:text-zxf-red hover:shadow-sm'
@@ -2561,8 +2519,8 @@
                                     </div>
 
                                     {/* Input */}
-                                    <div className="px-8 pb-6 bg-white">
-                                        <div className="flex items-center gap-4 bg-white border border-ink-100 rounded-2xl px-5 py-4 shadow-[0_14px_36px_-30px_rgba(15,23,42,0.45)]">
+                                    <div className="px-4 sm:px-8 lg:px-12 pb-5 bg-white">
+                                        <div className="flex items-center gap-4 bg-white border border-ink-100 rounded-2xl px-5 py-3.5 shadow-[0_14px_36px_-30px_rgba(15,23,42,0.45)]">
                                             <input
                                                 type="text"
                                                 value={inputValue}
@@ -2584,7 +2542,7 @@
                                                 <Icon name={isSending ? 'loader-2' : 'send'} size={16} className={isSending ? 'animate-spin' : ''} />
                                             </button>
                                         </div>
-                                        <div className="text-center text-xs text-ink-400 mt-4">
+                                        <div className="text-center text-[11px] text-ink-400 mt-3">
                                             内容由 AI 生成，仅供参考，请结合官方信息与自身情况理性决策
                                         </div>
                                     </div>
@@ -2703,58 +2661,78 @@
                                 </div>
                             </aside>
 
-                            {/* Mobile / Tablet Sidebar */}
+                            {/* Toggle History Drawer */}
                             {sidebarOpen && (
                                 <React.Fragment>
-                                    <div className="fixed inset-0 bg-black/30 z-40 xl:hidden" onClick={() => setSidebarOpen(false)}></div>
-                                    <div className="fixed right-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white z-50 p-5 overflow-y-auto xl:hidden space-y-4">
-                                        <div className="flex items-center justify-between mb-2">
-                                            <h3 className="font-bold text-ink-900">会话管理</h3>
+                                    <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setSidebarOpen(false)}></div>
+                                    <div className="chat-history-drawer bg-white border border-ink-100 rounded-3xl z-50 p-5 overflow-hidden space-y-4 shadow-2xl shadow-ink-900/15">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <h3 className="font-black text-ink-900">历史对话</h3>
+                                                <p className="text-xs text-ink-400 mt-1">需要切换上下文时再展开，不占用聊天阅读区。</p>
+                                            </div>
                                             <button onClick={() => setSidebarOpen(false)} className="p-2 hover:bg-ink-50 rounded-lg">
                                                 <Icon name="x" size={18} />
                                             </button>
                                         </div>
 
-                                        {/* 鏂板缓鍜ㄨ */}
-                                        <button
-                                            onClick={createNewSession}
-                                            disabled={isLoadingSessions}
-                                            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-zxf-red text-white text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50"
-                                        >
-                                            <Icon name="plus" size={16} />
-                                            新建咨询
-                                        </button>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <button
+                                                onClick={async () => {
+                                                    await createNewSession();
+                                                    setSidebarOpen(false);
+                                                }}
+                                                disabled={isLoadingSessions}
+                                                className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-zxf-red text-white text-sm font-bold hover:bg-red-700 transition-colors disabled:opacity-50"
+                                            >
+                                                <Icon name="plus" size={16} />
+                                                新建咨询
+                                            </button>
+                                            <button
+                                                onClick={clearAllSessions}
+                                                disabled={!safeSessions.length || isLoadingSessions}
+                                                className="flex items-center justify-center gap-2 py-2.5 rounded-xl border border-ink-100 text-sm font-bold text-ink-500 hover:bg-ink-50 disabled:opacity-40"
+                                            >
+                                                <Icon name="trash-2" size={15} />
+                                                清空
+                                            </button>
+                                        </div>
 
                                         {/* 浼氳瘽鍒楄〃 */}
                                         <div>
-                                            <div className="flex items-center justify-between mb-3">
-                                                <h3 className="font-bold text-ink-900 text-sm">咨询会话</h3>
+                                            <div className="flex items-center justify-between mb-3 px-1">
+                                                <h3 className="font-bold text-ink-900 text-sm">咨询会话 · {safeSessions.length}</h3>
                                                 {isLoadingSessions && <Icon name="loader-2" size={14} className="animate-spin text-ink-400" />}
                                             </div>
-                                            <div className="space-y-2 max-h-64 overflow-y-auto">
+                                            <div className="chat-history-scroll space-y-2 pr-1">
+                                                {safeSessions.length === 0 && (
+                                                    <div className="rounded-2xl border border-dashed border-ink-200 bg-ink-50/70 px-4 py-6 text-center text-sm text-ink-400">
+                                                        暂无历史对话。开始提问后会自动保存。
+                                                    </div>
+                                                )}
                                                 {safeSessions.map(session => (
                                                     <div
                                                         key={session.id}
                                                         onClick={() => switchSession(session.id)}
-                                                        className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${
+                                                        className={`group flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-colors ${
                                                             currentSessionId === session.id
-                                                                ? 'bg-red-50 border border-red-100'
+                                                                ? 'bg-red-50 border border-red-100 shadow-sm'
                                                                 : 'hover:bg-ink-50 border border-transparent'
                                                         }`}
                                                     >
                                                         <div className="flex-1 min-w-0">
-                                                            <div className={`text-xs font-medium truncate ${
+                                                            <div className={`text-sm font-bold truncate ${
                                                                 currentSessionId === session.id ? 'text-zxf-red' : 'text-ink-700'
                                                             }`}>
                                                                 {session.title}
                                                             </div>
-                                                            <div className="text-[10px] text-ink-400 mt-0.5">
-                                                                {session.created_at ? new Date(session.created_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                                                            <div className="text-[11px] text-ink-400 mt-1">
+                                                                {formatSessionTime(session)}
                                                             </div>
                                                         </div>
                                                         <button
                                                             onClick={(e) => deleteSession(e, session.id)}
-                                                            className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-100 rounded-md transition-opacity"
+                                                            className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1.5 hover:bg-red-100 rounded-md transition-opacity"
                                                             title="删除会话"
                                                         >
                                                             <Icon name="trash-2" size={12} className="text-ink-400 hover:text-red-500" />
