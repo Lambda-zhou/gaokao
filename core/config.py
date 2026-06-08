@@ -22,11 +22,26 @@ class Settings(BaseSettings):
 
     # LLM Provider
     llm_provider: str = os.getenv("LLM_PROVIDER", "deepseek")
+    llm_api_key: str = os.getenv("LLM_API_KEY", "")
+    llm_model: str = os.getenv("LLM_MODEL", "")
+    llm_base_url: str = os.getenv("LLM_BASE_URL", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/chat/completions")
+    mimo_api_key: str = os.getenv(
+        "MIMO_API_KEY",
+        os.getenv("MODELSCOPE_API_KEY", os.getenv("LLM_API_KEY", "")),
+    )
+    mimo_model: str = os.getenv("MIMO_MODEL", os.getenv("LLM_MODEL", "mimo-v2.5-pro"))
+    mimo_base_url: str = os.getenv(
+        "MIMO_BASE_URL",
+        os.getenv(
+            "MODELSCOPE_BASE_URL",
+            os.getenv("LLM_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        ),
+    )
 
     # 超时配置（秒）
     llm_timeout: int = int(os.getenv("LLM_TIMEOUT", "40"))

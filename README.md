@@ -302,7 +302,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. 配置 DeepSeek API
+### 2. 配置 LLM API（DeepSeek / Mimo）
 
 在项目根目录创建或修改 `.env`：
 
@@ -312,13 +312,19 @@ DEEPSEEK_MODEL=deepseek-v4-pro
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
 DEEPSEEK_BASE_URL=https://api.deepseek.com/chat/completions
 
+# 如果临时使用 Mimo / ModelScope OpenAI-compatible API：
+# LLM_PROVIDER=mimo
+# MIMO_MODEL=mimo-v2.5-pro
+# MIMO_API_KEY=你的 ModelScope 或 Mimo API Key
+# MIMO_BASE_URL=https://api-inference.modelscope.cn/v1
+
 LLM_TIMEOUT=40
 RESEARCH_TIMEOUT=6
 RATE_LIMIT_WINDOW=60
 RATE_LIMIT_MAX=30
 ```
 
-DeepSeek 配置读取位置：
+LLM 配置读取位置：
 
 - `core/config.py`
 - `core/llm_client.py`

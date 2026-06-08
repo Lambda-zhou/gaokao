@@ -25,16 +25,72 @@ class ZXFLLMClient:
 
     def __init__(self):
         self.provider = settings.llm_provider.lower()
+        self.llm_api_key = settings.llm_api_key
+        self.llm_model = settings.llm_model
+        self.llm_base_url = settings.llm_base_url
         self.anthropic_api_key = settings.anthropic_api_key
         self.deepseek_api_key = settings.deepseek_api_key
         self.deepseek_base_url = settings.deepseek_base_url
-        self.model = settings.deepseek_model if self.provider == "deepseek" else settings.anthropic_model
+        self.mimo_api_key = settings.mimo_api_key
+        self.mimo_base_url = settings.mimo_base_url
+        self.openai_compatible_providers = {"deepseek", "mimo", "modelscope", "openai-compatible"}
+        self.model, self.openai_api_key, self.openai_base_url, self.provider_label = self._resolve_llm_endpoint()
+        self.openai_base_url = self._normalize_chat_completions_url(self.openai_base_url)
         self.timeout = settings.llm_timeout
         self.system_prompt = self._load_system_prompt()
         self.client = None
         self._stream_local = threading.local()
         if self.provider == "anthropic" and HAS_ANTHROPIC and self.anthropic_api_key:
             self.client = anthropic.Anthropic(api_key=self.anthropic_api_key)
+
+    def _normalize_chat_completions_url(self, base_url: str) -> str:
+        """Accept either an OpenAI-compatible root (/v1) or full chat completions URL."""
+        cleaned = (base_url or "").rstrip("/")
+        if not cleaned:
+            return ""
+        if cleaned.endswith("/chat/completions"):
+            return cleaned
+        return f"{cleaned}/chat/completions"
+
+    def _resolve_llm_endpoint(self) -> tuple[str, str, str, str]:
+        """Resolve provider/model/base URL, including Mimo's OpenAI-compatible API."""
+        if self.provider in {"mimo", "modelscope"}:
+            return (
+                settings.mimo_model,
+                self.mimo_api_key,
+                self.mimo_base_url,
+                "Mimo",
+            )
+        if self.provider == "openai-compatible":
+            return (
+                self.llm_model or settings.mimo_model,
+                self.llm_api_key or self.mimo_api_key,
+                self.llm_base_url or self.mimo_base_url,
+                "OpenAI-compatible",
+            )
+        if self.provider == "deepseek":
+            # Compatibility: users sometimes keep LLM_PROVIDER=deepseek while testing
+            # Mimo by only changing the model name. Route that combination to the
+            # Mimo/OpenAI-compatible endpoint when a Mimo-compatible base URL is set.
+            if settings.deepseek_model.startswith("mimo-") and self.mimo_base_url:
+                return (
+                    settings.deepseek_model,
+                    self.mimo_api_key or self.deepseek_api_key,
+                    self.mimo_base_url,
+                    "Mimo",
+                )
+            return (
+                settings.deepseek_model,
+                self.deepseek_api_key,
+                self.deepseek_base_url,
+                "DeepSeek",
+            )
+        return (
+            settings.anthropic_model,
+            "",
+            "",
+            "Anthropic",
+        )
 
     @contextmanager
     def stream_deltas_to(self, callback):
@@ -60,8 +116,8 @@ class ZXFLLMClient:
             return ""
 
     def is_available(self) -> bool:
-        if self.provider == "deepseek":
-            return bool(self.deepseek_api_key)
+        if self.provider in self.openai_compatible_providers:
+            return bool(self.openai_api_key and self.openai_base_url)
         return self.client is not None
 
     def consult(
@@ -157,8 +213,8 @@ class ZXFLLMClient:
         """带重试的LLM调用"""
         for attempt in range(max_retries + 1):
             try:
-                if self.provider == "deepseek":
-                    return self._complete_deepseek(messages)
+                if self.provider in self.openai_compatible_providers:
+                    return self._complete_openai_compatible(messages)
                 return self._complete_anthropic(messages)
             except Exception as e:
                 logger.warning(f"LLM call failed (attempt {attempt + 1}/{max_retries + 1}): {e}")
@@ -196,7 +252,7 @@ class ZXFLLMClient:
         )
         return response.content[0].text if response.content else ""
 
-    def _complete_deepseek(self, messages: list[dict]) -> str:
+    def _complete_openai_compatible(self, messages: list[dict]) -> str:
         payload = {
             "model": self.model,
             "messages": [
@@ -209,13 +265,13 @@ class ZXFLLMClient:
         callback = self._stream_callback()
         if callback:
             payload["stream"] = True
-            return self._complete_deepseek_stream(payload, callback)
+            return self._complete_openai_compatible_stream(payload, callback)
 
         req = urllib.request.Request(
-            self.deepseek_base_url,
+            self.openai_base_url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self.deepseek_api_key}",
+                "Authorization": f"Bearer {self.openai_api_key}",
                 "Content-Type": "application/json",
             },
             method="POST",
@@ -225,23 +281,23 @@ class ZXFLLMClient:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"DeepSeek API HTTP {e.code}: {body}") from e
+            raise RuntimeError(f"{self.provider_label} API HTTP {e.code}: {body}") from e
         except urllib.error.URLError as e:
-            raise RuntimeError(f"DeepSeek API 请求失败：{e.reason}") from e
+            raise RuntimeError(f"{self.provider_label} API 请求失败：{e.reason}") from e
         except TimeoutError:
-            raise RuntimeError(f"DeepSeek API 请求超时（>{self.timeout}秒）") from None
+            raise RuntimeError(f"{self.provider_label} API 请求超时（>{self.timeout}秒）") from None
 
         choices = data.get("choices") or []
         if not choices:
-            raise RuntimeError(f"DeepSeek API 未返回有效 choices：{data}")
+            raise RuntimeError(f"{self.provider_label} API 未返回有效 choices：{data}")
         return choices[0].get("message", {}).get("content", "")
 
-    def _complete_deepseek_stream(self, payload: dict, callback) -> str:
+    def _complete_openai_compatible_stream(self, payload: dict, callback) -> str:
         req = urllib.request.Request(
-            self.deepseek_base_url,
+            self.openai_base_url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self.deepseek_api_key}",
+                "Authorization": f"Bearer {self.openai_api_key}",
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",
             },
@@ -271,13 +327,23 @@ class ZXFLLMClient:
                         callback(delta)
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"DeepSeek API HTTP {e.code}: {body}") from e
+            raise RuntimeError(f"{self.provider_label} API HTTP {e.code}: {body}") from e
         except urllib.error.URLError as e:
-            raise RuntimeError(f"DeepSeek API request failed: {e.reason}") from e
+            raise RuntimeError(f"{self.provider_label} API request failed: {e.reason}") from e
         except TimeoutError:
-            raise RuntimeError(f"DeepSeek API request timed out after {self.timeout}s") from None
+            raise RuntimeError(f"{self.provider_label} API request timed out after {self.timeout}s") from None
 
         return "".join(pieces)
+
+    # Backward-compatible aliases for older local scripts/tests that called the
+    # DeepSeek-specific helper names directly. The implementation is now shared
+    # by DeepSeek, Mimo/ModelScope, and generic OpenAI-compatible providers.
+    def _complete_deepseek(self, messages: list[dict]) -> str:
+        return self._complete_openai_compatible(messages)
+
+    def _complete_deepseek_stream(self, payload: dict, callback) -> str:
+        return self._complete_openai_compatible_stream(payload, callback)
+
     def _parse_response(self, text: str) -> ConsultResponse:
         """解析LLM返回的结构化文本"""
         thinking = []
@@ -388,11 +454,16 @@ class ZXFLLMClient:
 
     def _fallback_response(self, request: ConsultRequest) -> ConsultResponse:
         """当LLM API不可用时返回fallback回答"""
-        provider_hint = (
-            "请配置 DEEPSEEK_API_KEY 环境变量以启用AI咨询功能。"
-            if self.provider == "deepseek"
-            else "请配置 ANTHROPIC_API_KEY 环境变量以启用AI咨询功能。"
-        )
+        if self.provider in {"mimo", "modelscope"}:
+            provider_hint = "请配置 MIMO_API_KEY/MODELSCOPE_API_KEY 和 MIMO_BASE_URL 环境变量以启用AI咨询功能。"
+        elif self.provider == "openai-compatible":
+            provider_hint = "请配置 LLM_API_KEY、LLM_MODEL 和 LLM_BASE_URL 环境变量以启用AI咨询功能。"
+        elif self.provider == "deepseek" and self.model.startswith("mimo-"):
+            provider_hint = "当前模型是 Mimo，请配置 MIMO_API_KEY/MODELSCOPE_API_KEY 和 MIMO_BASE_URL。"
+        elif self.provider == "deepseek":
+            provider_hint = "请配置 DEEPSEEK_API_KEY 环境变量以启用AI咨询功能。"
+        else:
+            provider_hint = "请配置 ANTHROPIC_API_KEY 环境变量以启用AI咨询功能。"
         return ConsultResponse(
             answer=f"我跟你说，'{request.question}'这个问题——",
             thinking_process=[

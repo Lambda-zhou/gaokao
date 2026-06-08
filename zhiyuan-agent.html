@@ -1483,12 +1483,6 @@
                 bao: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', bar: 'bg-accent-green', light: 'bg-accent-green/20', badge: 'bg-emerald-100' },
             };
 
-            const getApiBaseUrl = () => {
-                const configured = getConfiguredApiBaseUrl();
-                if (configured) return configured;
-                return getDefaultApiBaseUrl();
-            };
-
             const parseNumber = (value) => {
                 if (value === undefined || value === null) return undefined;
                 const parsed = parseInt(String(value).replace(/[^\d]/g, ''), 10);

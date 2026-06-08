@@ -5,6 +5,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from core import consult_orchestrator as orchestrator_module
+from core import llm_client as llm_client_module
 from core.consult_orchestrator import consult_orchestrator
 from core.models import ConsultRequest, UserProfile
 from core.session_manager import session_manager
@@ -68,6 +69,35 @@ def routed(question: str):
 
 
 class ConsultIntentContractsTest(unittest.TestCase):
+    def test_mimo_provider_uses_modelscope_openai_compatible_endpoint(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "mimo"), \
+            patch.object(llm_client_module.settings, "mimo_model", "mimo-v2.5-pro"), \
+            patch.object(llm_client_module.settings, "mimo_api_key", "test-token"), \
+            patch.object(llm_client_module.settings, "mimo_base_url", "https://api-inference.modelscope.cn/v1"), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        self.assertEqual("mimo-v2.5-pro", client.model)
+        self.assertEqual("test-token", client.openai_api_key)
+        self.assertEqual("https://api-inference.modelscope.cn/v1/chat/completions", client.openai_base_url)
+        self.assertEqual("Mimo", client.provider_label)
+        self.assertTrue(client.is_available())
+
+    def test_mimo_model_under_deepseek_provider_uses_mimo_endpoint_when_configured(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "deepseek"), \
+            patch.object(llm_client_module.settings, "deepseek_model", "mimo-v2.5-pro"), \
+            patch.object(llm_client_module.settings, "deepseek_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_api_key", "test-token"), \
+            patch.object(llm_client_module.settings, "mimo_base_url", "https://api-inference.modelscope.cn/v1/"), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        self.assertEqual("mimo-v2.5-pro", client.model)
+        self.assertEqual("test-token", client.openai_api_key)
+        self.assertEqual("https://api-inference.modelscope.cn/v1/chat/completions", client.openai_base_url)
+        self.assertEqual("Mimo", client.provider_label)
+        self.assertTrue(client.is_available())
+
     def test_intent_router_keeps_common_consults_in_their_lanes(self):
         cases = [
             {
