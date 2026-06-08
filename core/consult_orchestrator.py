@@ -1005,7 +1005,12 @@ class ConsultOrchestrator:
             # 追问里出现新的专业方向时，以本轮问题为准，避免沿用第一次画像里的旧方向。
             ctx.major_preference = question_major_pref
 
-        return ConsultRequest(question=request.question, context=ctx)
+        return ConsultRequest(
+            question=request.question,
+            context=ctx,
+            session_id=request.session_id,
+            llm_config=request.llm_config,
+        )
 
     def _extract_school_region_preference(self, text: str, profile_province: str | None = None) -> list[str]:
         regions: list[str] = []

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from core import consult_orchestrator as orchestrator_module
 from core import llm_client as llm_client_module
 from core.consult_orchestrator import consult_orchestrator
-from core.models import ConsultRequest, UserProfile
+from core.models import ConsultRequest, LLMRequestConfig, UserProfile
 from core.session_manager import session_manager
 from main import app
 
@@ -134,9 +134,9 @@ class ConsultIntentContractsTest(unittest.TestCase):
 
         attempted = []
 
-        def fake_complete(messages):
-            attempted.append(client.model)
-            if client.model == "bad-model":
+        def fake_complete(messages, model=None, endpoint=None):
+            attempted.append(model)
+            if model == "bad-model":
                 raise RuntimeError("Provider API HTTP 400: Invalid model id: bad-model")
             return "[核心判断]\nok"
 
@@ -145,6 +145,70 @@ class ConsultIntentContractsTest(unittest.TestCase):
 
         self.assertEqual("[核心判断]\nok", text)
         self.assertEqual(["bad-model", "good-model"], attempted)
+
+    def test_per_request_llm_config_builds_temporary_endpoint_without_mutating_client(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
+            patch.object(llm_client_module.settings, "llm_model", "server-model"), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", ""), \
+            patch.object(llm_client_module.settings, "llm_api_key", "server-token"), \
+            patch.object(llm_client_module.settings, "llm_base_url", "https://server.example/v1"), \
+            patch.object(llm_client_module.settings, "mimo_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_base_url", ""), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        endpoint = client._request_openai_endpoint(LLMRequestConfig.model_validate({
+            "apiKey": "user-token",
+            "baseUrl": "https://user.example/v1",
+            "model": "user-model",
+            "modelCandidates": "user-model, backup-model",
+        }))
+
+        self.assertIsNotNone(endpoint)
+        self.assertEqual("user-token", endpoint.api_key)
+        self.assertEqual("https://user.example/v1/chat/completions", endpoint.base_url)
+        self.assertEqual(["user-model", "backup-model"], endpoint.model_candidates)
+        self.assertEqual("server-token", client.openai_api_key)
+        self.assertEqual("server-model", client.model)
+
+    def test_per_request_llm_config_tries_candidate_models_without_mutating_global_model(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
+            patch.object(llm_client_module.settings, "llm_model", "server-model"), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", ""), \
+            patch.object(llm_client_module.settings, "llm_api_key", "server-token"), \
+            patch.object(llm_client_module.settings, "llm_base_url", "https://server.example/v1"), \
+            patch.object(llm_client_module.settings, "mimo_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_base_url", ""), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        endpoint = client._request_openai_endpoint(LLMRequestConfig(
+            api_key="user-token",
+            base_url="https://user.example/v1",
+            model="bad-user-model",
+            model_candidates=["good-user-model"],
+        ))
+        attempted = []
+
+        def fake_complete(messages, model=None, endpoint=None):
+            attempted.append((model, endpoint.api_key))
+            if model == "bad-user-model":
+                raise RuntimeError("Provider API HTTP 400: Invalid model id: bad-user-model")
+            return "[核心判断]\nok"
+
+        with patch.object(client, "_complete_openai_compatible", side_effect=fake_complete):
+            text = client._complete_with_retry(
+                [{"role": "user", "content": "ping"}],
+                max_retries=0,
+                endpoint=endpoint,
+            )
+
+        self.assertEqual("[核心判断]\nok", text)
+        self.assertEqual(
+            [("bad-user-model", "user-token"), ("good-user-model", "user-token")],
+            attempted,
+        )
+        self.assertEqual("server-model", client.model)
 
     def test_intent_router_keeps_common_consults_in_their_lanes(self):
         cases = [
@@ -615,7 +679,7 @@ class ConsultIntentContractsTest(unittest.TestCase):
             return consult_orchestrator.consult(request, history=[])
 
     def _stream_with_stubbed_llm(self, question: str, streamed_answer: str, returned_answer: str, context=PROFILE, session_id: str | None = None):
-        def fake_complete(_messages):
+        def fake_complete(_messages, **_kwargs):
             callback = orchestrator_module.llm_client._stream_callback()
             if callback:
                 midpoint = max(1, len(streamed_answer) // 2)

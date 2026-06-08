@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Union
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
@@ -49,10 +49,48 @@ class OptionItem(BaseModel):
     school: Optional[str] = None
 
 
+class LLMRequestConfig(BaseModel):
+    """一次咨询请求内临时使用的大模型配置。
+
+    该配置用于 BYOK（Bring Your Own Key）场景，只随当前请求进入 LLM 调用链，
+    不写入会话记录，也不应出现在响应体或日志中。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = True
+    provider: Optional[str] = Field(default="openai-compatible", description="openai-compatible / openai / modelscope / mimo 等")
+    api_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("api_key", "apiKey", "key"),
+        description="用户自带 API Key，仅用于当前请求",
+    )
+    base_url: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("base_url", "baseUrl", "api_base", "apiBase"),
+        description="OpenAI-compatible /v1 或 /chat/completions 地址",
+    )
+    model: Optional[str] = Field(default=None, description="供应商控制台展示的精确模型 ID")
+    model_candidates: Optional[Union[List[str], str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_candidates", "modelCandidates", "backup_models", "backupModels"),
+        description="可选备用模型列表，或逗号分隔字符串",
+    )
+
+    @field_validator("provider", "api_key", "base_url", "model", mode="before")
+    @classmethod
+    def _strip_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
 class ConsultRequest(BaseModel):
     question: str
     context: Optional[UserProfile] = None
     session_id: Optional[str] = Field(default=None, description="关联的会话ID，用于多轮对话")
+    llm_config: Optional[LLMRequestConfig] = Field(
+        default=None,
+        description="当前请求临时使用的大模型配置；不会保存到会话",
+    )
 
 
 class ThinkingStep(BaseModel):

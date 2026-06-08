@@ -302,7 +302,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. 配置 LLM API（DeepSeek / Mimo）
+### 2. 配置 LLM API（DeepSeek / Mimo / 用户自带 Key）
 
 在项目根目录创建或修改 `.env`：
 
@@ -336,6 +336,11 @@ LLM 配置读取位置：
 
 - `core/config.py`
 - `core/llm_client.py`
+
+前端也支持 BYOK（Bring Your Own Key）：打开 `zhiyuan-agent.html` 后点击右上角 **模型配置**，填写任意
+OpenAI-compatible 服务的 `Base URL`、真实 `Model ID` 和自己的 `API Key`。这份配置只保存在当前浏览器
+`localStorage["zhiyuan_user_llm_config_v1"]`，每次咨询时通过 `llm_config` 临时发送给后端，后端不会把
+API Key 写入会话记录或响应体。若配置不完整，会自动回退到服务器 `.env` 中的默认 LLM。
 
 ### 3. 启动后端
 

@@ -242,6 +242,45 @@ LLM_MODEL_CANDIDATES=Qwen/Qwen3-235B-A22B,Qwen/Qwen3-30B-A3B
 
 ---
 
+## Scenario: BYOK per-request LLM configuration
+
+### 1. Scope / Trigger
+- Trigger: frontend or API changes let an end user provide their own OpenAI-compatible API key for one consultation request.
+- Applies to `zhiyuan-agent.html`, `core/models.py`, `core/llm_client.py`, and the consult orchestrator request flow.
+
+### 2. Signatures
+- Request field: `ConsultRequest.llm_config`
+- Frontend storage key: `localStorage["zhiyuan_user_llm_config_v1"]`
+- Runtime endpoint builder: `ZXFLLMClient._request_openai_endpoint(config)`
+
+### 3. Contracts
+- User API keys are browser-local configuration and are sent only as the current request's `llm_config`.
+- Backend must not persist `llm_config` into sessions, session messages, responses, or logs.
+- A complete BYOK config requires `api_key`, `base_url`, and exact provider `model`.
+- `base_url` may be an OpenAI-compatible root ending in `/v1` or a full `/chat/completions` URL.
+- Per-request config must not mutate global `llm_client` provider/model/key/base-url fields, because streaming requests run concurrently.
+- If BYOK config is missing or incomplete, fall back to the server `.env` LLM config.
+
+### 4. Validation & Error Matrix
+- Missing `api_key` / `base_url` / `model` -> ignore BYOK and use server config/fallback.
+- Invalid BYOK model -> retry `model_candidates` before local fallback.
+- BYOK provider network/API error -> include only the provider error summary in `thinking_process`; never echo the API key.
+- Session save after consult -> only save user question and assistant answer.
+
+### 5. Wrong vs Correct
+#### Wrong
+```python
+self.openai_api_key = request.llm_config.api_key
+```
+
+#### Correct
+```python
+endpoint = self._request_openai_endpoint(request.llm_config)
+answer = self._complete_with_retry(messages, endpoint=endpoint)
+```
+
+---
+
 ## Code Review Checklist
 
 <!-- What reviewers should check -->

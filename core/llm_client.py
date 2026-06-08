@@ -4,6 +4,7 @@ import re
 import time
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 import urllib.error
 import urllib.request
 
@@ -15,9 +16,21 @@ except ImportError:
 
 from core.config import settings
 from core.answer_guard import answer_guard
-from core.models import ConsultRequest, ConsultResponse, ThinkingStep
+from core.models import ConsultRequest, ConsultResponse, LLMRequestConfig, ThinkingStep
 
 logger = logging.getLogger("app.llm")
+
+
+@dataclass(frozen=True)
+class OpenAICompatibleEndpoint:
+    provider_label: str
+    api_key: str
+    base_url: str
+    model: str
+    model_candidates: list[str]
+
+    def is_available(self) -> bool:
+        return bool(self.api_key and self.base_url and self.model)
 
 
 class ZXFLLMClient:
@@ -111,6 +124,74 @@ class ZXFLLMClient:
             candidates = [self._normalize_model(model, "Mimo") for model in candidates]
         return self._dedupe_models(candidates)
 
+    def _server_openai_endpoint(self) -> OpenAICompatibleEndpoint:
+        return OpenAICompatibleEndpoint(
+            provider_label=self.provider_label,
+            api_key=self.openai_api_key,
+            base_url=self.openai_base_url,
+            model=self.model,
+            model_candidates=self.model_candidates or ([self.model] if self.model else []),
+        )
+
+    def _request_openai_endpoint(self, config: LLMRequestConfig | None) -> OpenAICompatibleEndpoint | None:
+        """Build a per-request OpenAI-compatible endpoint for BYOK.
+
+        The returned object is deliberately local to the current consultation so a user's
+        API key is never stored on the global client or session state.
+        """
+        if not config or not config.enabled:
+            return None
+
+        api_key = (config.api_key or "").strip()
+        base_url = self._normalize_chat_completions_url(config.base_url or "")
+        model = self._normalize_model(config.model or "", "Mimo")
+        if not (api_key and base_url and model):
+            logger.info("Ignoring incomplete per-request LLM config; falling back to server LLM config")
+            return None
+
+        provider = (config.provider or "openai-compatible").strip().lower()
+        label_map = {
+            "mimo": "Mimo",
+            "modelscope": "Mimo",
+            "deepseek": "DeepSeek",
+            "openai": "OpenAI-compatible",
+            "openai-compatible": "OpenAI-compatible",
+        }
+        provider_label = label_map.get(provider, "OpenAI-compatible")
+        raw_candidates = config.model_candidates
+        if isinstance(raw_candidates, str):
+            candidates = self._split_csv(raw_candidates)
+        elif isinstance(raw_candidates, list):
+            candidates = [str(item).strip() for item in raw_candidates if str(item).strip()]
+        else:
+            candidates = []
+        candidates = self._dedupe_models([model, *[self._normalize_model(item, "Mimo") for item in candidates]])
+        return OpenAICompatibleEndpoint(
+            provider_label=provider_label,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            model_candidates=candidates or [model],
+        )
+
+    def _safe_error_text(
+        self,
+        error: Exception,
+        endpoint: OpenAICompatibleEndpoint | None = None,
+    ) -> str:
+        text = str(error)
+        secrets = [
+            endpoint.api_key if endpoint else "",
+            self.openai_api_key,
+            self.deepseek_api_key,
+            self.mimo_api_key,
+            self.anthropic_api_key,
+        ]
+        for secret in secrets:
+            if secret:
+                text = text.replace(secret, "[redacted-api-key]")
+        return text
+
     def _resolve_llm_endpoint(self) -> tuple[str, str, str, str]:
         """Resolve provider/model/base URL.
 
@@ -194,7 +275,8 @@ class ZXFLLMClient:
         citations: list[str] | None = None,
         history: list[dict] | None = None,
     ) -> ConsultResponse:
-        if not self.is_available():
+        request_endpoint = self._request_openai_endpoint(request.llm_config)
+        if not request_endpoint and not self.is_available():
             logger.warning("LLM not available, returning fallback")
             return self._fallback_response(request)
 
@@ -258,7 +340,7 @@ class ZXFLLMClient:
         messages.append(current_message)
 
         try:
-            answer = self._complete_with_retry(messages)
+            answer = self._complete_with_retry(messages, endpoint=request_endpoint)
             response = self._parse_response(answer)
             response = self._enforce_data_notice(response, extra_context, citations or [])
             if fact_data_mode:
@@ -273,56 +355,69 @@ class ZXFLLMClient:
             response.citations = citations or []
             return response
         except Exception as e:
-            logger.error(f"LLM final failure, using local fallback: {e}")
-            return self._fallback_from_context(request, extra_context, citations or [], str(e))
+            safe_error = self._safe_error_text(e, request_endpoint)
+            logger.error("LLM final failure, using local fallback: %s", safe_error)
+            return self._fallback_from_context(request, extra_context, citations or [], safe_error)
 
-    def _complete_with_retry(self, messages: list[dict], max_retries: int = 1) -> str:
+    def _complete_with_retry(
+        self,
+        messages: list[dict],
+        max_retries: int = 1,
+        endpoint: OpenAICompatibleEndpoint | None = None,
+    ) -> str:
         """带重试的LLM调用"""
-        if self.provider in self.openai_compatible_providers:
-            return self._complete_openai_compatible_with_model_fallback(messages, max_retries=max_retries)
+        if endpoint or self.provider in self.openai_compatible_providers:
+            return self._complete_openai_compatible_with_model_fallback(
+                messages,
+                max_retries=max_retries,
+                endpoint=endpoint,
+            )
 
         for attempt in range(max_retries + 1):
             try:
                 return self._complete_anthropic(messages)
             except Exception as e:
-                logger.warning(f"LLM call failed (attempt {attempt + 1}/{max_retries + 1}): {e}")
+                safe_error = self._safe_error_text(e)
+                logger.warning("LLM call failed (attempt %s/%s): %s", attempt + 1, max_retries + 1, safe_error)
                 if attempt < max_retries:
                     wait = 2 ** attempt  # 指数退避
                     logger.info(f"Retrying in {wait}s...")
                     time.sleep(wait)
                 else:
-                    logger.error(f"LLM call failed after {max_retries + 1} attempts: {e}")
+                    logger.error("LLM call failed after %s attempts: %s", max_retries + 1, safe_error)
                     raise
 
     def _complete_openai_compatible_with_model_fallback(
         self,
         messages: list[dict],
         max_retries: int = 1,
+        endpoint: OpenAICompatibleEndpoint | None = None,
     ) -> str:
         last_error: Exception | None = None
-        candidates = self.model_candidates or [self.model]
+        endpoint = endpoint or self._server_openai_endpoint()
+        candidates = endpoint.model_candidates or [endpoint.model]
 
         for model_index, model in enumerate(candidates):
-            self.model = model
             for attempt in range(max_retries + 1):
                 try:
-                    return self._complete_openai_compatible(messages)
+                    return self._complete_openai_compatible(messages, model=model, endpoint=endpoint)
                 except Exception as e:
                     last_error = e
                     if self._is_invalid_model_error(e) and model_index < len(candidates) - 1:
                         logger.warning(
                             "%s model %s is rejected by provider; trying next candidate %s",
-                            self.provider_label,
+                            endpoint.provider_label,
                             model,
                             candidates[model_index + 1],
                         )
                         break
+                    safe_error = self._safe_error_text(e, endpoint)
                     logger.warning(
                         "LLM call failed (model %s, attempt %s/%s): %s",
                         model,
                         attempt + 1,
                         max_retries + 1,
-                        e,
+                        safe_error,
                     )
                     if attempt < max_retries:
                         wait = 2 ** attempt
@@ -333,14 +428,14 @@ class ZXFLLMClient:
                             "LLM call failed after %s attempts for model %s: %s",
                             max_retries + 1,
                             model,
-                            e,
+                            safe_error,
                         )
                         if model_index >= len(candidates) - 1:
                             raise
 
         if last_error:
             raise last_error
-        raise RuntimeError(f"{self.provider_label} API 未配置可用模型")
+        raise RuntimeError(f"{endpoint.provider_label} API 未配置可用模型")
 
     def _is_invalid_model_error(self, error: Exception) -> bool:
         text = str(error).lower()
@@ -378,9 +473,16 @@ class ZXFLLMClient:
         )
         return response.content[0].text if response.content else ""
 
-    def _complete_openai_compatible(self, messages: list[dict]) -> str:
+    def _complete_openai_compatible(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        endpoint: OpenAICompatibleEndpoint | None = None,
+    ) -> str:
+        endpoint = endpoint or self._server_openai_endpoint()
+        active_model = model or endpoint.model
         payload = {
-            "model": self.model,
+            "model": active_model,
             "messages": [
                 {"role": "system", "content": self.system_prompt},
                 *messages,
@@ -391,13 +493,13 @@ class ZXFLLMClient:
         callback = self._stream_callback()
         if callback:
             payload["stream"] = True
-            return self._complete_openai_compatible_stream(payload, callback)
+            return self._complete_openai_compatible_stream(payload, callback, endpoint=endpoint)
 
         req = urllib.request.Request(
-            self.openai_base_url,
+            endpoint.base_url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self.openai_api_key}",
+                "Authorization": f"Bearer {endpoint.api_key}",
                 "Content-Type": "application/json",
             },
             method="POST",
@@ -407,23 +509,29 @@ class ZXFLLMClient:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{self.provider_label} API HTTP {e.code}: {body}") from e
+            raise RuntimeError(f"{endpoint.provider_label} API HTTP {e.code}: {body}") from e
         except urllib.error.URLError as e:
-            raise RuntimeError(f"{self.provider_label} API 请求失败：{e.reason}") from e
+            raise RuntimeError(f"{endpoint.provider_label} API 请求失败：{e.reason}") from e
         except TimeoutError:
-            raise RuntimeError(f"{self.provider_label} API 请求超时（>{self.timeout}秒）") from None
+            raise RuntimeError(f"{endpoint.provider_label} API 请求超时（>{self.timeout}秒）") from None
 
         choices = data.get("choices") or []
         if not choices:
-            raise RuntimeError(f"{self.provider_label} API 未返回有效 choices：{data}")
+            raise RuntimeError(f"{endpoint.provider_label} API 未返回有效 choices：{data}")
         return choices[0].get("message", {}).get("content", "")
 
-    def _complete_openai_compatible_stream(self, payload: dict, callback) -> str:
+    def _complete_openai_compatible_stream(
+        self,
+        payload: dict,
+        callback,
+        endpoint: OpenAICompatibleEndpoint | None = None,
+    ) -> str:
+        endpoint = endpoint or self._server_openai_endpoint()
         req = urllib.request.Request(
-            self.openai_base_url,
+            endpoint.base_url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self.openai_api_key}",
+                "Authorization": f"Bearer {endpoint.api_key}",
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",
             },
@@ -453,11 +561,11 @@ class ZXFLLMClient:
                         callback(delta)
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{self.provider_label} API HTTP {e.code}: {body}") from e
+            raise RuntimeError(f"{endpoint.provider_label} API HTTP {e.code}: {body}") from e
         except urllib.error.URLError as e:
-            raise RuntimeError(f"{self.provider_label} API request failed: {e.reason}") from e
+            raise RuntimeError(f"{endpoint.provider_label} API request failed: {e.reason}") from e
         except TimeoutError:
-            raise RuntimeError(f"{self.provider_label} API request timed out after {self.timeout}s") from None
+            raise RuntimeError(f"{endpoint.provider_label} API request timed out after {self.timeout}s") from None
 
         return "".join(pieces)
 
