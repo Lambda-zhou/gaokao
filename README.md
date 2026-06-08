@@ -302,7 +302,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. 配置 LLM API（DeepSeek / Mimo / 用户自带 Key）
+### 2. 配置 LLM API（DeepSeek / MiMo / ModelScope / 用户自带 Key）
 
 在项目根目录创建或修改 `.env`：
 
@@ -319,11 +319,17 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com/chat/completions
 # LLM_API_KEY=你的服务商 API Key
 # LLM_BASE_URL=https://服务商的/v1地址
 
-# 如果临时使用 Mimo / ModelScope OpenAI-compatible API：
+# 小米 MiMo token-plan 示例：模型 ID 按小米控制台原样填写，不会映射成 ModelScope 模型：
 # LLM_PROVIDER=mimo
+# MIMO_MODEL=mimo-v2.5-pro
+# MIMO_API_KEY=你的小米 MiMo token-plan API Key
+# MIMO_BASE_URL=https://token-plan-...xiaomimimo.com/v1
+
+# ModelScope OpenAI-compatible 示例：legacy 的 mimo-v2.5-pro 只会在 ModelScope 下映射到 Qwen：
+# LLM_PROVIDER=modelscope
 # MIMO_MODEL=Qwen/Qwen3-235B-A22B
 # MIMO_MODEL_CANDIDATES=Qwen/Qwen3-235B-A22B,Qwen/Qwen3-30B-A3B
-# MIMO_API_KEY=你的 ModelScope 或 Mimo API Key
+# MIMO_API_KEY=你的 ModelScope API Key
 # MIMO_BASE_URL=https://api-inference.modelscope.cn/v1
 
 LLM_TIMEOUT=40
@@ -336,6 +342,7 @@ RATE_LIMIT_MAX=30
 
 - Base URL 支持 `https://.../v1` 或完整 `https://.../v1/chat/completions`
 - 模型 ID 必须填写供应商控制台里的真实名称
+- 小米 MiMo token-plan 请选择 `provider=mimo`，模型如 `mimo-v2.5-pro` 会原样发送；ModelScope 请选择 `provider=modelscope`
 - API Key 只保存在浏览器 localStorage，每次咨询临时发送给后端，不写入会话
 - 如果跳过 AI 设置，系统仍能运行，但会更依赖本地规则，结果通常不如接入 AI 后准确
 

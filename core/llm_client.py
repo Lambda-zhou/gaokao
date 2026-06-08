@@ -62,7 +62,16 @@ class ZXFLLMClient:
         self.mimo_model = settings.mimo_model
         self.mimo_model_candidates = settings.mimo_model_candidates
         self.mimo_base_url = settings.mimo_base_url
-        self.openai_compatible_providers = {"deepseek", "mimo", "modelscope", "openai-compatible", "openai"}
+        self.openai_compatible_providers = {
+            "deepseek",
+            "mimo",
+            "xiaomi-mimo",
+            "modelscope",
+            "openai-compatible",
+            "openai",
+            "generic",
+            "custom",
+        }
         self.model, self.openai_api_key, self.openai_base_url, self.provider_label = self._resolve_llm_endpoint()
         self.openai_base_url = self._normalize_chat_completions_url(self.openai_base_url)
         self.model_candidates = self._resolve_model_candidates()
@@ -84,11 +93,11 @@ class ZXFLLMClient:
 
     def _normalize_model(self, model: str, provider_label: str) -> str:
         cleaned = (model or "").strip()
-        if provider_label == "Mimo" and cleaned in self.LEGACY_MIMO_MODEL_ALIASES:
+        if provider_label == "ModelScope" and cleaned in self.LEGACY_MIMO_MODEL_ALIASES:
             mapped = self.LEGACY_MIMO_MODEL_ALIASES[cleaned]
             logger.warning(
-                "Mimo model %s is a legacy alias and is mapped to ModelScope model id %s. "
-                "Set MIMO_MODEL/MODELSCOPE_MODEL explicitly to avoid this warning.",
+                "ModelScope legacy model alias %s is mapped to ModelScope model id %s. "
+                "Set MODELSCOPE_MODEL or MIMO_MODEL explicitly to avoid this warning.",
                 cleaned,
                 mapped,
             )
@@ -110,23 +119,26 @@ class ZXFLLMClient:
         """Model retry order for OpenAI-compatible providers.
 
         Many deployments share an OpenAI-compatible protocol but use different model ids.
-        Let users provide a comma-separated candidate list, and keep a safe ModelScope
-        default for the old Mimo preset so an invalid legacy id does not break demos.
+        Let users provide a comma-separated candidate list. Keep a safe default
+        only for ModelScope; Xiaomi MiMo token-plan model ids must be preserved.
         """
         if self.provider not in self.openai_compatible_providers:
             return [self.model] if self.model else []
 
         candidates = [self.model]
-        if self.provider in {"mimo", "modelscope"}:
+        if self.provider in {"mimo", "xiaomi-mimo", "modelscope"}:
+            candidates.extend(self._split_csv(self.mimo_model_candidates))
+            if self.provider_label == "ModelScope":
+                candidates.append(self.MODELSCOPE_DEFAULT_MODEL)
+        elif self.provider == "deepseek" and self.provider_label == "ModelScope":
             candidates.extend(self._split_csv(self.mimo_model_candidates))
             candidates.append(self.MODELSCOPE_DEFAULT_MODEL)
-        elif self.provider == "deepseek" and self.provider_label == "Mimo":
+        elif self.provider == "deepseek" and self.provider_label == "MiMo":
             candidates.extend(self._split_csv(self.mimo_model_candidates))
-            candidates.append(self.MODELSCOPE_DEFAULT_MODEL)
         else:
             candidates.extend(self._split_csv(self.llm_model_candidates))
-        if self.provider_label == "Mimo":
-            candidates = [self._normalize_model(model, "Mimo") for model in candidates]
+        if self.provider_label == "ModelScope":
+            candidates = [self._normalize_model(model, "ModelScope") for model in candidates]
         return self._dedupe_models(candidates)
 
     def _server_openai_endpoint(self) -> OpenAICompatibleEndpoint:
@@ -147,22 +159,35 @@ class ZXFLLMClient:
         if not config or not config.enabled:
             return None
 
+        provider = (config.provider or "openai-compatible").strip().lower()
         api_key = (config.api_key or "").strip()
         base_url = self._normalize_chat_completions_url(config.base_url or "")
-        model = self._normalize_model(config.model or "", "Mimo")
+        base_url_lower = base_url.lower()
+        label_map = {
+            "mimo": "MiMo",
+            "xiaomi-mimo": "MiMo",
+            "modelscope": "ModelScope",
+            "deepseek": "DeepSeek",
+            "openai": "OpenAI-compatible",
+            "openai-compatible": "OpenAI-compatible",
+            "generic": "OpenAI-compatible",
+            "custom": "OpenAI-compatible",
+        }
+        provider_label = label_map.get(provider, "OpenAI-compatible")
+        if "modelscope" in base_url_lower:
+            provider_label = "ModelScope"
+        elif "xiaomimimo" in base_url_lower:
+            provider_label = "MiMo"
+        should_map_modelscope_alias = provider_label == "ModelScope"
+        model = (
+            self._normalize_model(config.model or "", "ModelScope")
+            if should_map_modelscope_alias
+            else (config.model or "").strip()
+        )
         if not (api_key and base_url and model):
             logger.info("Ignoring incomplete per-request LLM config; falling back to server LLM config")
             return None
 
-        provider = (config.provider or "openai-compatible").strip().lower()
-        label_map = {
-            "mimo": "Mimo",
-            "modelscope": "Mimo",
-            "deepseek": "DeepSeek",
-            "openai": "OpenAI-compatible",
-            "openai-compatible": "OpenAI-compatible",
-        }
-        provider_label = label_map.get(provider, "OpenAI-compatible")
         raw_candidates = config.model_candidates
         if isinstance(raw_candidates, str):
             candidates = self._split_csv(raw_candidates)
@@ -170,7 +195,11 @@ class ZXFLLMClient:
             candidates = [str(item).strip() for item in raw_candidates if str(item).strip()]
         else:
             candidates = []
-        candidates = self._dedupe_models([model, *[self._normalize_model(item, "Mimo") for item in candidates]])
+        normalized_candidates = [
+            self._normalize_model(item, "ModelScope") if should_map_modelscope_alias else item
+            for item in candidates
+        ]
+        candidates = self._dedupe_models([model, *normalized_candidates])
         return OpenAICompatibleEndpoint(
             provider_label=provider_label,
             api_key=api_key,
@@ -278,7 +307,9 @@ class ZXFLLMClient:
     ) -> ConsultResponse:
         provider = endpoint.provider_label if endpoint else self.provider_label
         model = endpoint.model if endpoint else self.model
-        if provider == "Mimo":
+        if provider == "MiMo":
+            fix_hint = "请检查小米 MiMo token 是否有效，Base URL 是否为 token plan 提供的 /v1 或 /chat/completions 地址，并确认模型 ID 原样填写。"
+        elif provider == "ModelScope":
             fix_hint = "请检查 MIMO_API_KEY 或 MODELSCOPE_API_KEY 是否是有效的 ModelScope token，并确认 Notebook 里已重新 export 后重启 uvicorn。"
         elif provider == "DeepSeek":
             fix_hint = "请检查 DEEPSEEK_API_KEY 是否有效，或改用 LLM_PROVIDER=openai-compatible 配置备用模型。"
@@ -317,15 +348,20 @@ class ZXFLLMClient:
         Provider-specific variables are kept as convenience aliases for DeepSeek and
         ModelScope/Mimo.
         """
-        if self.provider in {"mimo", "modelscope"}:
-            model = self.mimo_model or self.llm_model or self.MODELSCOPE_DEFAULT_MODEL
+        if self.provider in {"mimo", "xiaomi-mimo", "modelscope"}:
+            label = (
+                "ModelScope"
+                if self.provider == "modelscope" or "modelscope" in (self.mimo_base_url or "").lower()
+                else "MiMo"
+            )
+            model = self.mimo_model or self.llm_model or (self.MODELSCOPE_DEFAULT_MODEL if label == "ModelScope" else "")
             return (
-                self._normalize_model(model, "Mimo"),
+                self._normalize_model(model, "ModelScope") if label == "ModelScope" else (model or "").strip(),
                 self.mimo_api_key,
                 self.mimo_base_url,
-                "Mimo",
+                label,
             )
-        if self.provider in {"openai-compatible", "openai"}:
+        if self.provider in {"openai-compatible", "openai", "generic", "custom"}:
             return (
                 self.llm_model,
                 self.llm_api_key or self.mimo_api_key,
@@ -337,12 +373,13 @@ class ZXFLLMClient:
             # Mimo by only changing the model name. Route that combination to the
             # Mimo/OpenAI-compatible endpoint when a Mimo-compatible base URL is set.
             if settings.deepseek_model.startswith("mimo-") and self.mimo_base_url:
-                model = self._normalize_model(settings.deepseek_model, "Mimo")
+                label = "ModelScope" if "modelscope" in (self.mimo_base_url or "").lower() else "MiMo"
+                model = self._normalize_model(settings.deepseek_model, "ModelScope") if label == "ModelScope" else settings.deepseek_model
                 return (
                     model,
                     self.mimo_api_key or self.deepseek_api_key,
                     self.mimo_base_url,
-                    "Mimo",
+                    label,
                 )
             return (
                 settings.deepseek_model,
@@ -784,12 +821,14 @@ class ZXFLLMClient:
 
     def _fallback_response(self, request: ConsultRequest) -> ConsultResponse:
         """当 LLM 配置不完整时透明返回配置错误，不冒充 AI 回答。"""
-        if self.provider in {"mimo", "modelscope"}:
-            provider_hint = "请配置 MIMO_API_KEY/MODELSCOPE_API_KEY 和 MIMO_BASE_URL 环境变量以启用AI咨询功能。"
-        elif self.provider == "openai-compatible":
+        if self.provider in {"mimo", "xiaomi-mimo"}:
+            provider_hint = "请配置小米 MiMo token-plan 的 MIMO_API_KEY、MIMO_MODEL 和 MIMO_BASE_URL 环境变量以启用AI咨询功能。"
+        elif self.provider == "modelscope":
+            provider_hint = "请配置 MODELSCOPE_API_KEY/MIMO_API_KEY、MODELSCOPE_MODEL/MIMO_MODEL 和 MODELSCOPE_BASE_URL/MIMO_BASE_URL 环境变量以启用AI咨询功能。"
+        elif self.provider in {"openai-compatible", "openai", "generic", "custom"}:
             provider_hint = "请配置 LLM_API_KEY、LLM_MODEL 和 LLM_BASE_URL 环境变量以启用AI咨询功能。"
         elif self.provider == "deepseek" and self.model.startswith("mimo-"):
-            provider_hint = "当前模型是 Mimo，请配置 MIMO_API_KEY/MODELSCOPE_API_KEY 和 MIMO_BASE_URL。"
+            provider_hint = "当前模型是 MiMo，请配置小米 MiMo 的 MIMO_API_KEY、MIMO_MODEL 和 MIMO_BASE_URL。"
         elif self.provider == "deepseek":
             provider_hint = "请配置 DEEPSEEK_API_KEY 环境变量以启用AI咨询功能。"
         else:

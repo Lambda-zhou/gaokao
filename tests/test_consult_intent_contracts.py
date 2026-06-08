@@ -71,7 +71,7 @@ def routed(question: str):
 
 class ConsultIntentContractsTest(unittest.TestCase):
     def test_mimo_provider_maps_legacy_model_to_modelscope_default(self):
-        with patch.object(llm_client_module.settings, "llm_provider", "mimo"), \
+        with patch.object(llm_client_module.settings, "llm_provider", "modelscope"), \
             patch.object(llm_client_module.settings, "mimo_model", "mimo-v2.5-pro"), \
             patch.object(llm_client_module.settings, "llm_model", ""), \
             patch.object(llm_client_module.settings, "mimo_model_candidates", ""), \
@@ -85,8 +85,24 @@ class ConsultIntentContractsTest(unittest.TestCase):
         self.assertEqual(["Qwen/Qwen3-235B-A22B"], client.model_candidates)
         self.assertEqual("test-token", client.openai_api_key)
         self.assertEqual("https://api-inference.modelscope.cn/v1/chat/completions", client.openai_base_url)
-        self.assertEqual("Mimo", client.provider_label)
+        self.assertEqual("ModelScope", client.provider_label)
         self.assertTrue(client.is_available())
+
+    def test_xiaomi_mimo_keeps_native_model_id(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "mimo"), \
+            patch.object(llm_client_module.settings, "mimo_model", "mimo-v2.5-pro"), \
+            patch.object(llm_client_module.settings, "llm_model", ""), \
+            patch.object(llm_client_module.settings, "mimo_model_candidates", ""), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", ""), \
+            patch.object(llm_client_module.settings, "mimo_api_key", "test-token"), \
+            patch.object(llm_client_module.settings, "mimo_base_url", "https://token-plan-sgp.xiaomimimo.com/v1"), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        self.assertEqual("mimo-v2.5-pro", client.model)
+        self.assertEqual(["mimo-v2.5-pro"], client.model_candidates)
+        self.assertEqual("MiMo", client.provider_label)
+        self.assertEqual("https://token-plan-sgp.xiaomimimo.com/v1/chat/completions", client.openai_base_url)
 
     def test_mimo_model_under_deepseek_provider_uses_mimo_endpoint_when_configured(self):
         with patch.object(llm_client_module.settings, "llm_provider", "deepseek"), \
@@ -102,7 +118,7 @@ class ConsultIntentContractsTest(unittest.TestCase):
         self.assertEqual("Qwen/Qwen3-235B-A22B", client.model)
         self.assertEqual("test-token", client.openai_api_key)
         self.assertEqual("https://api-inference.modelscope.cn/v1/chat/completions", client.openai_base_url)
-        self.assertEqual("Mimo", client.provider_label)
+        self.assertEqual("ModelScope", client.provider_label)
         self.assertTrue(client.is_available())
 
     def test_openai_compatible_provider_uses_generic_llm_fields(self):
@@ -232,6 +248,50 @@ class ConsultIntentContractsTest(unittest.TestCase):
         self.assertEqual(["user-model", "backup-model"], endpoint.model_candidates)
         self.assertEqual("server-token", client.openai_api_key)
         self.assertEqual("server-model", client.model)
+
+    def test_per_request_xiaomi_mimo_keeps_native_model_id(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
+            patch.object(llm_client_module.settings, "llm_model", "server-model"), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", ""), \
+            patch.object(llm_client_module.settings, "llm_api_key", "server-token"), \
+            patch.object(llm_client_module.settings, "llm_base_url", "https://server.example/v1"), \
+            patch.object(llm_client_module.settings, "mimo_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_base_url", ""), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        endpoint = client._request_openai_endpoint(LLMRequestConfig.model_validate({
+            "provider": "mimo",
+            "apiKey": "user-token",
+            "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1",
+            "model": "mimo-v2.5-pro",
+        }))
+
+        self.assertEqual("MiMo", endpoint.provider_label)
+        self.assertEqual("mimo-v2.5-pro", endpoint.model)
+        self.assertEqual(["mimo-v2.5-pro"], endpoint.model_candidates)
+
+    def test_per_request_modelscope_url_maps_legacy_model_even_with_mimo_provider(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
+            patch.object(llm_client_module.settings, "llm_model", "server-model"), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", ""), \
+            patch.object(llm_client_module.settings, "llm_api_key", "server-token"), \
+            patch.object(llm_client_module.settings, "llm_base_url", "https://server.example/v1"), \
+            patch.object(llm_client_module.settings, "mimo_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_base_url", ""), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        endpoint = client._request_openai_endpoint(LLMRequestConfig.model_validate({
+            "provider": "mimo",
+            "apiKey": "user-token",
+            "baseUrl": "https://api-inference.modelscope.cn/v1",
+            "model": "mimo-v2.5-pro",
+        }))
+
+        self.assertEqual("ModelScope", endpoint.provider_label)
+        self.assertEqual("Qwen/Qwen3-235B-A22B", endpoint.model)
+        self.assertEqual(["Qwen/Qwen3-235B-A22B"], endpoint.model_candidates)
 
     def test_per_request_llm_config_tries_candidate_models_without_mutating_global_model(self):
         with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \

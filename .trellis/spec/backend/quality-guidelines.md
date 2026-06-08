@@ -196,10 +196,11 @@ while still allowing `?api=` / localStorage overrides.
   - `LLM_BASE_URL` may be either an OpenAI-compatible root ending in `/v1` or a full `/chat/completions` URL.
   - `LLM_MODEL` must be the exact model id shown by the user's provider console.
   - `LLM_MODEL_CANDIDATES` is a comma-separated retry order for alternate model ids.
-- Mimo/ModelScope contract:
-  - `LLM_PROVIDER=mimo` and `LLM_PROVIDER=modelscope` both use the OpenAI-compatible call path.
-  - `mimo-v2.5-pro` is a legacy alias and must not be documented as the preferred model id.
-  - Legacy `mimo-v2.5-pro` is mapped to `Qwen/Qwen3-235B-A22B` to avoid breaking existing demo env files.
+- MiMo/ModelScope contract:
+  - `LLM_PROVIDER=mimo` and `LLM_PROVIDER=modelscope` both use the OpenAI-compatible call path, but they are not the same provider.
+  - Xiaomi MiMo token-plan (`provider=mimo` or a `xiaomimimo.com` base URL) must preserve the exact console model id, e.g. `mimo-v2.5-pro`.
+  - ModelScope (`provider=modelscope` or a `modelscope` base URL) may map legacy `mimo-v2.5-pro` to `Qwen/Qwen3-235B-A22B` to avoid breaking older demo env files.
+  - The shared OpenAI adapter should tolerate common provider differences: `/v1` or full `/chat/completions` base URLs, `max_tokens` vs `max_completion_tokens`, and providers that reject `temperature`.
 - Availability contract:
   - OpenAI-compatible providers are available only when API key, normalized base URL, and resolved model are all non-empty.
 
@@ -211,8 +212,9 @@ while still allowing `?api=` / localStorage overrides.
 
 ### 5. Good / Base / Bad Cases
 - Good: `LLM_PROVIDER=openai-compatible`, exact provider model id in `LLM_MODEL`, and backup ids in `LLM_MODEL_CANDIDATES`.
-- Base: `LLM_PROVIDER=mimo` with `MIMO_MODEL=Qwen/Qwen3-235B-A22B`.
-- Bad: documenting or requiring `mimo-v2.5-pro` as the active ModelScope model id.
+- Good: `LLM_PROVIDER=mimo`, Xiaomi token-plan `/v1` base URL, and `MIMO_MODEL=mimo-v2.5-pro`.
+- Base: `LLM_PROVIDER=modelscope` with `MIMO_MODEL=Qwen/Qwen3-235B-A22B`.
+- Bad: mapping Xiaomi MiMo native `mimo-v2.5-pro` to a ModelScope Qwen id.
 
 ### 6. Tests Required
 - Endpoint resolution:
@@ -220,6 +222,7 @@ while still allowing `?api=` / localStorage overrides.
   - assert `/v1` base URLs normalize to `/v1/chat/completions`.
 - Model compatibility:
   - assert legacy `mimo-v2.5-pro` maps to a valid ModelScope-style model id.
+  - assert Xiaomi MiMo keeps native `mimo-v2.5-pro` when provider/base URL indicates MiMo.
   - assert invalid-model errors advance to the next candidate.
 - Fallback:
   - assert non-model HTTP errors do not skip to another model unless they match invalid-model wording.
@@ -228,16 +231,24 @@ while still allowing `?api=` / localStorage overrides.
 #### Wrong
 ```env
 LLM_PROVIDER=mimo
+MIMO_BASE_URL=https://api-inference.modelscope.cn/v1
 MIMO_MODEL=mimo-v2.5-pro
 ```
 
 #### Correct
 ```env
-LLM_PROVIDER=openai-compatible
-LLM_BASE_URL=https://api-inference.modelscope.cn/v1
-LLM_API_KEY=your_key
-LLM_MODEL=Qwen/Qwen3-235B-A22B
-LLM_MODEL_CANDIDATES=Qwen/Qwen3-235B-A22B,Qwen/Qwen3-30B-A3B
+LLM_PROVIDER=mimo
+MIMO_BASE_URL=https://token-plan-...xiaomimimo.com/v1
+MIMO_API_KEY=your_xiaomi_mimo_key
+MIMO_MODEL=mimo-v2.5-pro
+```
+
+```env
+LLM_PROVIDER=modelscope
+MIMO_BASE_URL=https://api-inference.modelscope.cn/v1
+MIMO_API_KEY=your_modelscope_key
+MIMO_MODEL=Qwen/Qwen3-235B-A22B
+MIMO_MODEL_CANDIDATES=Qwen/Qwen3-235B-A22B,Qwen/Qwen3-30B-A3B
 ```
 
 ---

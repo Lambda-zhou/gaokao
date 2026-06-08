@@ -575,9 +575,9 @@
         const LLM_SETUP_STORAGE_KEY = 'zhiyuan_llm_setup_state_v1';
         const DEFAULT_USER_LLM_CONFIG = {
             enabled: false,
-            provider: 'openai-compatible',
-            base_url: 'https://api-inference.modelscope.cn/v1',
-            model: 'Qwen/Qwen3-235B-A22B',
+            provider: 'mimo',
+            base_url: '',
+            model: '',
             model_candidates: '',
             api_key: ''
         };
@@ -618,7 +618,7 @@
                 .map(item => item.trim())
                 .filter(Boolean);
             return {
-                provider: config.provider || 'openai-compatible',
+                provider: config.provider || 'mimo',
                 api_key: apiKey,
                 base_url: baseUrl,
                 model,
@@ -1683,19 +1683,29 @@
                                                     支持大多数 OpenAI Chat 兼容接口。建议先填写 Base URL、模型 ID 和 API Key 并测试；
                                                     如果暂时跳过，系统仍可运行，但会更依赖本地规则，结果通常不如接入 AI 后准确。
                                                 </p>
-                                                <div className="grid md:grid-cols-3 gap-3 mt-4">
+                                                <div className="grid md:grid-cols-4 gap-3 mt-4">
+                                                    <select
+                                                        value={llmConfig.provider || 'mimo'}
+                                                        onChange={(e) => updateLlmConfigField('provider', e.target.value)}
+                                                        className="px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
+                                                    >
+                                                        <option value="mimo">小米 MiMo / OpenAI Chat</option>
+                                                        <option value="openai-compatible">通用 OpenAI-compatible</option>
+                                                        <option value="modelscope">ModelScope</option>
+                                                        <option value="deepseek">DeepSeek-compatible</option>
+                                                    </select>
                                                     <input
                                                         type="text"
                                                         value={llmConfig.base_url || ''}
                                                         onChange={(e) => updateLlmConfigField('base_url', e.target.value)}
-                                                        placeholder="Base URL，如 https://.../v1"
+                                                        placeholder="Base URL，如 https://token-plan-.../v1"
                                                         className="px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
                                                     />
                                                     <input
                                                         type="text"
                                                         value={llmConfig.model || ''}
                                                         onChange={(e) => updateLlmConfigField('model', e.target.value)}
-                                                        placeholder="模型 ID，由你按控制台填写"
+                                                        placeholder="模型 ID，如 mimo-v2.5-pro"
                                                         className="px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
                                                     />
                                                     <input
@@ -2269,12 +2279,25 @@
 
                                                 <div className="grid md:grid-cols-2 gap-3">
                                                     <label className="block">
+                                                        <span className="text-xs font-bold text-ink-500">接口类型</span>
+                                                        <select
+                                                            value={llmConfig.provider || 'mimo'}
+                                                            onChange={(e) => updateLlmConfigField('provider', e.target.value)}
+                                                            className="mt-1 w-full px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
+                                                        >
+                                                            <option value="mimo">小米 MiMo / OpenAI Chat</option>
+                                                            <option value="openai-compatible">通用 OpenAI-compatible</option>
+                                                            <option value="modelscope">ModelScope</option>
+                                                            <option value="deepseek">DeepSeek-compatible</option>
+                                                        </select>
+                                                    </label>
+                                                    <label className="block">
                                                         <span className="text-xs font-bold text-ink-500">Base URL（/v1 或 /chat/completions）</span>
                                                         <input
                                                             type="text"
                                                             value={llmConfig.base_url || ''}
                                                             onChange={(e) => updateLlmConfigField('base_url', e.target.value)}
-                                                            placeholder="https://api-inference.modelscope.cn/v1"
+                                                            placeholder="https://token-plan-...xiaomimimo.com/v1"
                                                             className="mt-1 w-full px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
                                                         />
                                                     </label>
@@ -2284,7 +2307,7 @@
                                                             type="text"
                                                             value={llmConfig.model || ''}
                                                             onChange={(e) => updateLlmConfigField('model', e.target.value)}
-                                                            placeholder="Qwen/Qwen3-235B-A22B"
+                                                            placeholder="mimo-v2.5-pro"
                                                             className="mt-1 w-full px-3 py-2 rounded-xl border border-ink-100 text-sm outline-none focus:border-zxf-red"
                                                         />
                                                     </label>
