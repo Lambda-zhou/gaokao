@@ -166,6 +166,82 @@ while still allowing `?api=` / localStorage overrides.
 
 ---
 
+## Scenario: Flexible OpenAI-compatible LLM configuration
+
+### 1. Scope / Trigger
+- Trigger: backend code changes LLM provider/model/base URL resolution in `core/config.py` or `core/llm_client.py`.
+- Applies to DeepSeek, Mimo/ModelScope, and arbitrary OpenAI-compatible providers.
+
+### 2. Signatures
+- Settings fields:
+  - `LLM_PROVIDER`
+  - `LLM_API_KEY`
+  - `LLM_BASE_URL`
+  - `LLM_MODEL`
+  - `LLM_MODEL_CANDIDATES`
+  - `DEEPSEEK_API_KEY`
+  - `DEEPSEEK_BASE_URL`
+  - `DEEPSEEK_MODEL`
+  - `MIMO_API_KEY` / `MODELSCOPE_API_KEY`
+  - `MIMO_BASE_URL` / `MODELSCOPE_BASE_URL`
+  - `MIMO_MODEL` / `MODELSCOPE_MODEL`
+  - `MIMO_MODEL_CANDIDATES` / `MODELSCOPE_MODEL_CANDIDATES`
+- Runtime entry:
+  - `ZXFLLMClient._resolve_llm_endpoint()`
+  - `ZXFLLMClient._complete_with_retry(messages, max_retries=1)`
+
+### 3. Contracts
+- Generic provider contract:
+  - For unknown providers, prefer `LLM_PROVIDER=openai-compatible`.
+  - `LLM_BASE_URL` may be either an OpenAI-compatible root ending in `/v1` or a full `/chat/completions` URL.
+  - `LLM_MODEL` must be the exact model id shown by the user's provider console.
+  - `LLM_MODEL_CANDIDATES` is a comma-separated retry order for alternate model ids.
+- Mimo/ModelScope contract:
+  - `LLM_PROVIDER=mimo` and `LLM_PROVIDER=modelscope` both use the OpenAI-compatible call path.
+  - `mimo-v2.5-pro` is a legacy alias and must not be documented as the preferred model id.
+  - Legacy `mimo-v2.5-pro` is mapped to `Qwen/Qwen3-235B-A22B` to avoid breaking existing demo env files.
+- Availability contract:
+  - OpenAI-compatible providers are available only when API key, normalized base URL, and resolved model are all non-empty.
+
+### 4. Validation & Error Matrix
+- Missing API key/base/model -> `is_available()` is false and consultation uses local fallback.
+- HTTP 400 with “invalid model / model id / model not found” -> try the next configured model candidate before final fallback.
+- All model candidates fail -> return local fallback with the error summary in `thinking_process`, not in the main answer.
+- Network timeout / provider unreachable -> retry the same model according to `max_retries`, then local fallback.
+
+### 5. Good / Base / Bad Cases
+- Good: `LLM_PROVIDER=openai-compatible`, exact provider model id in `LLM_MODEL`, and backup ids in `LLM_MODEL_CANDIDATES`.
+- Base: `LLM_PROVIDER=mimo` with `MIMO_MODEL=Qwen/Qwen3-235B-A22B`.
+- Bad: documenting or requiring `mimo-v2.5-pro` as the active ModelScope model id.
+
+### 6. Tests Required
+- Endpoint resolution:
+  - assert generic OpenAI-compatible config uses `LLM_*` fields.
+  - assert `/v1` base URLs normalize to `/v1/chat/completions`.
+- Model compatibility:
+  - assert legacy `mimo-v2.5-pro` maps to a valid ModelScope-style model id.
+  - assert invalid-model errors advance to the next candidate.
+- Fallback:
+  - assert non-model HTTP errors do not skip to another model unless they match invalid-model wording.
+
+### 7. Wrong vs Correct
+#### Wrong
+```env
+LLM_PROVIDER=mimo
+MIMO_MODEL=mimo-v2.5-pro
+```
+
+#### Correct
+```env
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=https://api-inference.modelscope.cn/v1
+LLM_API_KEY=your_key
+LLM_MODEL=Qwen/Qwen3-235B-A22B
+LLM_MODEL_CANDIDATES=Qwen/Qwen3-235B-A22B,Qwen/Qwen3-30B-A3B
+```
+
+---
+
 ## Code Review Checklist
 
 <!-- What reviewers should check -->

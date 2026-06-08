@@ -308,13 +308,21 @@ pip install -r requirements.txt
 
 ```env
 LLM_PROVIDER=deepseek
-DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_MODEL=deepseek-chat
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
 DEEPSEEK_BASE_URL=https://api.deepseek.com/chat/completions
 
+# 推荐：任意 OpenAI-compatible 服务都可以走通用配置：
+# LLM_PROVIDER=openai-compatible
+# LLM_MODEL=服务商控制台里的真实 model id
+# LLM_MODEL_CANDIDATES=主模型,备用模型
+# LLM_API_KEY=你的服务商 API Key
+# LLM_BASE_URL=https://服务商的/v1地址
+
 # 如果临时使用 Mimo / ModelScope OpenAI-compatible API：
 # LLM_PROVIDER=mimo
-# MIMO_MODEL=mimo-v2.5-pro
+# MIMO_MODEL=Qwen/Qwen3-235B-A22B
+# MIMO_MODEL_CANDIDATES=Qwen/Qwen3-235B-A22B,Qwen/Qwen3-30B-A3B
 # MIMO_API_KEY=你的 ModelScope 或 Mimo API Key
 # MIMO_BASE_URL=https://api-inference.modelscope.cn/v1
 

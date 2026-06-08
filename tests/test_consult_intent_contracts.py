@@ -69,15 +69,19 @@ def routed(question: str):
 
 
 class ConsultIntentContractsTest(unittest.TestCase):
-    def test_mimo_provider_uses_modelscope_openai_compatible_endpoint(self):
+    def test_mimo_provider_maps_legacy_model_to_modelscope_default(self):
         with patch.object(llm_client_module.settings, "llm_provider", "mimo"), \
             patch.object(llm_client_module.settings, "mimo_model", "mimo-v2.5-pro"), \
+            patch.object(llm_client_module.settings, "llm_model", ""), \
+            patch.object(llm_client_module.settings, "mimo_model_candidates", ""), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", ""), \
             patch.object(llm_client_module.settings, "mimo_api_key", "test-token"), \
             patch.object(llm_client_module.settings, "mimo_base_url", "https://api-inference.modelscope.cn/v1"), \
             patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
             client = llm_client_module.ZXFLLMClient()
 
-        self.assertEqual("mimo-v2.5-pro", client.model)
+        self.assertEqual("Qwen/Qwen3-235B-A22B", client.model)
+        self.assertEqual(["Qwen/Qwen3-235B-A22B"], client.model_candidates)
         self.assertEqual("test-token", client.openai_api_key)
         self.assertEqual("https://api-inference.modelscope.cn/v1/chat/completions", client.openai_base_url)
         self.assertEqual("Mimo", client.provider_label)
@@ -87,16 +91,60 @@ class ConsultIntentContractsTest(unittest.TestCase):
         with patch.object(llm_client_module.settings, "llm_provider", "deepseek"), \
             patch.object(llm_client_module.settings, "deepseek_model", "mimo-v2.5-pro"), \
             patch.object(llm_client_module.settings, "deepseek_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_model_candidates", ""), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", ""), \
             patch.object(llm_client_module.settings, "mimo_api_key", "test-token"), \
             patch.object(llm_client_module.settings, "mimo_base_url", "https://api-inference.modelscope.cn/v1/"), \
             patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
             client = llm_client_module.ZXFLLMClient()
 
-        self.assertEqual("mimo-v2.5-pro", client.model)
+        self.assertEqual("Qwen/Qwen3-235B-A22B", client.model)
         self.assertEqual("test-token", client.openai_api_key)
         self.assertEqual("https://api-inference.modelscope.cn/v1/chat/completions", client.openai_base_url)
         self.assertEqual("Mimo", client.provider_label)
         self.assertTrue(client.is_available())
+
+    def test_openai_compatible_provider_uses_generic_llm_fields(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
+            patch.object(llm_client_module.settings, "llm_model", "provider/model-a"), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", "provider/model-b, provider/model-c"), \
+            patch.object(llm_client_module.settings, "llm_api_key", "generic-token"), \
+            patch.object(llm_client_module.settings, "llm_base_url", "https://example.test/v1"), \
+            patch.object(llm_client_module.settings, "mimo_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_base_url", ""), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        self.assertEqual("provider/model-a", client.model)
+        self.assertEqual(["provider/model-a", "provider/model-b", "provider/model-c"], client.model_candidates)
+        self.assertEqual("generic-token", client.openai_api_key)
+        self.assertEqual("https://example.test/v1/chat/completions", client.openai_base_url)
+        self.assertTrue(client.is_available())
+
+    def test_invalid_model_error_tries_next_candidate(self):
+        with patch.object(llm_client_module.settings, "llm_provider", "openai-compatible"), \
+            patch.object(llm_client_module.settings, "llm_model", "bad-model"), \
+            patch.object(llm_client_module.settings, "llm_model_candidates", "good-model"), \
+            patch.object(llm_client_module.settings, "llm_api_key", "generic-token"), \
+            patch.object(llm_client_module.settings, "llm_base_url", "https://example.test/v1"), \
+            patch.object(llm_client_module.settings, "mimo_api_key", ""), \
+            patch.object(llm_client_module.settings, "mimo_base_url", ""), \
+            patch.object(llm_client_module.ZXFLLMClient, "_load_system_prompt", return_value=""):
+            client = llm_client_module.ZXFLLMClient()
+
+        attempted = []
+
+        def fake_complete(messages):
+            attempted.append(client.model)
+            if client.model == "bad-model":
+                raise RuntimeError("Provider API HTTP 400: Invalid model id: bad-model")
+            return "[核心判断]\nok"
+
+        with patch.object(client, "_complete_openai_compatible", side_effect=fake_complete):
+            text = client._complete_with_retry([{"role": "user", "content": "ping"}], max_retries=0)
+
+        self.assertEqual("[核心判断]\nok", text)
+        self.assertEqual(["bad-model", "good-model"], attempted)
 
     def test_intent_router_keeps_common_consults_in_their_lanes(self):
         cases = [

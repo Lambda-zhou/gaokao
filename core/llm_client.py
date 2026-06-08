@@ -23,19 +23,28 @@ logger = logging.getLogger("app.llm")
 class ZXFLLMClient:
     """LLM API 封装：张雪峰角色咨询（含超时、重试、降级）"""
 
+    MODELSCOPE_DEFAULT_MODEL = "Qwen/Qwen3-235B-A22B"
+    LEGACY_MIMO_MODEL_ALIASES = {
+        "mimo-v2.5-pro": MODELSCOPE_DEFAULT_MODEL,
+    }
+
     def __init__(self):
-        self.provider = settings.llm_provider.lower()
+        self.provider = (settings.llm_provider or "deepseek").lower().strip()
         self.llm_api_key = settings.llm_api_key
         self.llm_model = settings.llm_model
+        self.llm_model_candidates = settings.llm_model_candidates
         self.llm_base_url = settings.llm_base_url
         self.anthropic_api_key = settings.anthropic_api_key
         self.deepseek_api_key = settings.deepseek_api_key
         self.deepseek_base_url = settings.deepseek_base_url
         self.mimo_api_key = settings.mimo_api_key
+        self.mimo_model = settings.mimo_model
+        self.mimo_model_candidates = settings.mimo_model_candidates
         self.mimo_base_url = settings.mimo_base_url
-        self.openai_compatible_providers = {"deepseek", "mimo", "modelscope", "openai-compatible"}
+        self.openai_compatible_providers = {"deepseek", "mimo", "modelscope", "openai-compatible", "openai"}
         self.model, self.openai_api_key, self.openai_base_url, self.provider_label = self._resolve_llm_endpoint()
         self.openai_base_url = self._normalize_chat_completions_url(self.openai_base_url)
+        self.model_candidates = self._resolve_model_candidates()
         self.timeout = settings.llm_timeout
         self.system_prompt = self._load_system_prompt()
         self.client = None
@@ -52,18 +61,75 @@ class ZXFLLMClient:
             return cleaned
         return f"{cleaned}/chat/completions"
 
-    def _resolve_llm_endpoint(self) -> tuple[str, str, str, str]:
-        """Resolve provider/model/base URL, including Mimo's OpenAI-compatible API."""
+    def _split_csv(self, value: str) -> list[str]:
+        return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+    def _normalize_model(self, model: str, provider_label: str) -> str:
+        cleaned = (model or "").strip()
+        if provider_label == "Mimo" and cleaned in self.LEGACY_MIMO_MODEL_ALIASES:
+            mapped = self.LEGACY_MIMO_MODEL_ALIASES[cleaned]
+            logger.warning(
+                "Mimo model %s is a legacy alias and is mapped to ModelScope model id %s. "
+                "Set MIMO_MODEL/MODELSCOPE_MODEL explicitly to avoid this warning.",
+                cleaned,
+                mapped,
+            )
+            return mapped
+        return cleaned
+
+    def _dedupe_models(self, models: list[str]) -> list[str]:
+        seen = set()
+        result = []
+        for model in models:
+            cleaned = (model or "").strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            result.append(cleaned)
+        return result
+
+    def _resolve_model_candidates(self) -> list[str]:
+        """Model retry order for OpenAI-compatible providers.
+
+        Many deployments share an OpenAI-compatible protocol but use different model ids.
+        Let users provide a comma-separated candidate list, and keep a safe ModelScope
+        default for the old Mimo preset so an invalid legacy id does not break demos.
+        """
+        if self.provider not in self.openai_compatible_providers:
+            return [self.model] if self.model else []
+
+        candidates = [self.model]
         if self.provider in {"mimo", "modelscope"}:
+            candidates.extend(self._split_csv(self.mimo_model_candidates))
+            candidates.append(self.MODELSCOPE_DEFAULT_MODEL)
+        elif self.provider == "deepseek" and self.provider_label == "Mimo":
+            candidates.extend(self._split_csv(self.mimo_model_candidates))
+            candidates.append(self.MODELSCOPE_DEFAULT_MODEL)
+        else:
+            candidates.extend(self._split_csv(self.llm_model_candidates))
+        if self.provider_label == "Mimo":
+            candidates = [self._normalize_model(model, "Mimo") for model in candidates]
+        return self._dedupe_models(candidates)
+
+    def _resolve_llm_endpoint(self) -> tuple[str, str, str, str]:
+        """Resolve provider/model/base URL.
+
+        Preferred generic path:
+        LLM_PROVIDER=openai-compatible + LLM_BASE_URL + LLM_MODEL + LLM_API_KEY.
+        Provider-specific variables are kept as convenience aliases for DeepSeek and
+        ModelScope/Mimo.
+        """
+        if self.provider in {"mimo", "modelscope"}:
+            model = self.mimo_model or self.llm_model or self.MODELSCOPE_DEFAULT_MODEL
             return (
-                settings.mimo_model,
+                self._normalize_model(model, "Mimo"),
                 self.mimo_api_key,
                 self.mimo_base_url,
                 "Mimo",
             )
-        if self.provider == "openai-compatible":
+        if self.provider in {"openai-compatible", "openai"}:
             return (
-                self.llm_model or settings.mimo_model,
+                self.llm_model,
                 self.llm_api_key or self.mimo_api_key,
                 self.llm_base_url or self.mimo_base_url,
                 "OpenAI-compatible",
@@ -73,8 +139,9 @@ class ZXFLLMClient:
             # Mimo by only changing the model name. Route that combination to the
             # Mimo/OpenAI-compatible endpoint when a Mimo-compatible base URL is set.
             if settings.deepseek_model.startswith("mimo-") and self.mimo_base_url:
+                model = self._normalize_model(settings.deepseek_model, "Mimo")
                 return (
-                    settings.deepseek_model,
+                    model,
                     self.mimo_api_key or self.deepseek_api_key,
                     self.mimo_base_url,
                     "Mimo",
@@ -117,7 +184,7 @@ class ZXFLLMClient:
 
     def is_available(self) -> bool:
         if self.provider in self.openai_compatible_providers:
-            return bool(self.openai_api_key and self.openai_base_url)
+            return bool(self.openai_api_key and self.openai_base_url and self.model)
         return self.client is not None
 
     def consult(
@@ -211,10 +278,11 @@ class ZXFLLMClient:
 
     def _complete_with_retry(self, messages: list[dict], max_retries: int = 1) -> str:
         """带重试的LLM调用"""
+        if self.provider in self.openai_compatible_providers:
+            return self._complete_openai_compatible_with_model_fallback(messages, max_retries=max_retries)
+
         for attempt in range(max_retries + 1):
             try:
-                if self.provider in self.openai_compatible_providers:
-                    return self._complete_openai_compatible(messages)
                 return self._complete_anthropic(messages)
             except Exception as e:
                 logger.warning(f"LLM call failed (attempt {attempt + 1}/{max_retries + 1}): {e}")
@@ -225,6 +293,64 @@ class ZXFLLMClient:
                 else:
                     logger.error(f"LLM call failed after {max_retries + 1} attempts: {e}")
                     raise
+
+    def _complete_openai_compatible_with_model_fallback(
+        self,
+        messages: list[dict],
+        max_retries: int = 1,
+    ) -> str:
+        last_error: Exception | None = None
+        candidates = self.model_candidates or [self.model]
+
+        for model_index, model in enumerate(candidates):
+            self.model = model
+            for attempt in range(max_retries + 1):
+                try:
+                    return self._complete_openai_compatible(messages)
+                except Exception as e:
+                    last_error = e
+                    if self._is_invalid_model_error(e) and model_index < len(candidates) - 1:
+                        logger.warning(
+                            "%s model %s is rejected by provider; trying next candidate %s",
+                            self.provider_label,
+                            model,
+                            candidates[model_index + 1],
+                        )
+                        break
+                    logger.warning(
+                        "LLM call failed (model %s, attempt %s/%s): %s",
+                        model,
+                        attempt + 1,
+                        max_retries + 1,
+                        e,
+                    )
+                    if attempt < max_retries:
+                        wait = 2 ** attempt
+                        logger.info(f"Retrying in {wait}s...")
+                        time.sleep(wait)
+                    else:
+                        logger.error(
+                            "LLM call failed after %s attempts for model %s: %s",
+                            max_retries + 1,
+                            model,
+                            e,
+                        )
+                        if model_index >= len(candidates) - 1:
+                            raise
+
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"{self.provider_label} API 未配置可用模型")
+
+    def _is_invalid_model_error(self, error: Exception) -> bool:
+        text = str(error).lower()
+        return (
+            "invalid model" in text
+            or "model id" in text
+            or "model not found" in text
+            or "does not exist" in text
+            or "unknown model" in text
+        )
 
     def _complete_anthropic(self, messages: list[dict]) -> str:
         callback = self._stream_callback()

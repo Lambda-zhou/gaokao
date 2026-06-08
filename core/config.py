@@ -21,9 +21,15 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins_str.split(",") if origin.strip()]
 
     # LLM Provider
+    # Recommended generic path for most users:
+    #   LLM_PROVIDER=openai-compatible
+    #   LLM_BASE_URL=<provider OpenAI-compatible /v1 endpoint>
+    #   LLM_MODEL=<provider model id>
+    #   LLM_API_KEY=<provider api key>
     llm_provider: str = os.getenv("LLM_PROVIDER", "deepseek")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
     llm_model: str = os.getenv("LLM_MODEL", "")
+    llm_model_candidates: str = os.getenv("LLM_MODEL_CANDIDATES", "")
     llm_base_url: str = os.getenv("LLM_BASE_URL", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
@@ -34,7 +40,11 @@ class Settings(BaseSettings):
         "MIMO_API_KEY",
         os.getenv("MODELSCOPE_API_KEY", os.getenv("LLM_API_KEY", "")),
     )
-    mimo_model: str = os.getenv("MIMO_MODEL", os.getenv("LLM_MODEL", "mimo-v2.5-pro"))
+    mimo_model: str = os.getenv("MIMO_MODEL", os.getenv("MODELSCOPE_MODEL", os.getenv("LLM_MODEL", "")))
+    mimo_model_candidates: str = os.getenv(
+        "MIMO_MODEL_CANDIDATES",
+        os.getenv("MODELSCOPE_MODEL_CANDIDATES", os.getenv("LLM_MODEL_CANDIDATES", "")),
+    )
     mimo_base_url: str = os.getenv(
         "MIMO_BASE_URL",
         os.getenv(
